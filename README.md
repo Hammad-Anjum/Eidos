@@ -1,106 +1,129 @@
 # Eidos
 
-A fully-local iOS personal AI assistant. Gemma 4 runs on-device via MLX Swift, embeddings come from Apple `NLContextualEmbedding`, persistence is SwiftData, and **zero data leaves the device** after the initial model download.
+**The on-device AI that does what Siri can't** — remembers everything, acts on your behalf, and never leaks your data.
 
-See [architecture.md](architecture.md) for the full design, [plan.md](plan.md) for the build plan, and [masterplan.md](masterplan.md) for the strategic roadmap. Known gaps and deferred work live in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
+Eidos is a native iOS personal assistant built around a strict on-device constraint: **after the one-time model download, zero bytes leave your phone**. No cloud inference, no telemetry, no analytics, no sync. The knowledge you feed it — notes, voice memos, calendar, contacts, imported messages, health signals — lives and stays on the device it was captured on.
 
-## Status
+The agent is powered by **Gemma 4** running through **MLX Swift** on Apple Silicon, with retrieval over a **tiered memory system** that persists across sessions and decays like human memory. Thirteen built-in skills can read state (calendar, reminders, contacts, KB) and perform actions (WhatsApp, SMS, email, calls, navigation, rides) — every outbound action confirmed before dispatch.
 
-All seven roadmap phases have shipped in scoped form. The roadmap is tracked in `masterplan.md` — each phase notes what made it in vs. what was deferred with a clear reason.
+---
 
-- **0** Scaffolding — ✅
-- **1** Persistence + embeddings + hybrid RRF — ✅
-- **2** Inference (MLX Swift + Gemma 4) — ✅ (real-device validation pending)
-- **3** Memory system + RAG + voice + KB browser — ✅
-- **4** Platform sources + skills + home/digest — ✅ (4.3 relationship intel / 4.4 notifications → 6.x deferred)
-- **5** App actions + importers — ✅ (5.2 real share ext / 5.4 App Intents deferred)
-- **6** Proactive intelligence + HealthKit + notifications — ✅ (6.1 routine learner / 6.4 life log / 6.5 tone engine deferred)
-- **7** Polish + tests + ship-readiness — ✅
+## What defines this codebase
 
-120+ tests, all passing.
+- **Native iOS, not cross-platform.** Pure Swift 6 + SwiftUI + SwiftData. No React Native, no Flutter, no web views. Every framework is the Apple one that was built for the job.
+- **Strict concurrency, enforced.** Swift 6 strict concurrency is on for every target. `@Model` objects never cross actor boundaries — all background work hands off via `PersistentIdentifier` through `@ModelActor`.
+- **Privacy as a property, not a promise.** `EgressGuard` registers a `URLProtocol` subclass that blocks outbound traffic at the `URLSession` layer. The limitation is documented openly rather than hidden — see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
+- **Memory that behaves like memory.** Not a flat vector store. Markdown files on disk, tiered P1–P5 (core identity → active → topic → recent → archive), with automatic decay and end-of-session crystallization that consolidates transient context into longer-lived entries.
+- **Hybrid retrieval.** Vector search via Apple's built-in `NLContextualEmbedding` (Neural Engine, no bundled weights) merged with keyword search through Reciprocal Rank Fusion. Exact-match queries and semantic queries both work.
+- **Agentic with a safety rail.** The model can call tools natively, but every App Action (message, call, navigate, ride) routes through `ActionConfirmationSheet` before dispatch. Nothing sent silently.
+- **Honest about scope.** Features that aren't done are in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md), not hidden in docs. The product makes no claim it can't back up.
 
-## Build
+---
 
-```bash
-brew install xcodegen
-xcodegen generate
-open Eidos.xcodeproj
+## How Eidos thinks
+
+```
+                     ┌───────────────────────────────┐
+                     │          ChatView             │
+                     └──────────────┬────────────────┘
+                                    │  user turn
+                        ┌───────────▼────────────┐
+                        │      RAGPipeline       │
+                        │  (single-pass, tool-   │
+                        │   calling native to    │
+                        │   Gemma 4)             │
+                        └───────────┬────────────┘
+                                    │
+          ┌─────────────┬───────────┼───────────┬──────────────┐
+          │             │           │           │              │
+   ┌──────▼──────┐ ┌────▼─────┐ ┌───▼───┐ ┌─────▼─────┐ ┌──────▼──────┐
+   │  Knowledge  │ │  Memory  │ │ Skill │ │  Gemma 4  │ │  Platform   │
+   │ Repository  │ │ Manager  │ │ Registry│ │ (MLX)    │ │  Sources    │
+   │  (SwiftData │ │ (Markdown│ │  (13   │ │ streaming │ │  (EventKit, │
+   │  + vectors) │ │  P1–P5)  │ │  tools)│ │  AsyncSeq │ │  HealthKit, │
+   │             │ │          │ │        │ │           │ │  CNContacts,│
+   │             │ │          │ │        │ │           │ │  Location,  │
+   │             │ │          │ │        │ │           │ │  Motion,    │
+   │             │ │          │ │        │ │           │ │  Music,     │
+   │             │ │          │ │        │ │           │ │  Focus)     │
+   └─────────────┘ └──────────┘ └────────┘ └───────────┘ └─────────────┘
 ```
 
-In Xcode:
-1. Blue project icon → **Eidos** target → **Signing & Capabilities** → check **Automatically manage signing** → pick your Personal Team.
-2. Same for the **EidosShareExtension** target — same team.
-3. Pick a destination: **iPhone 17 (iOS 26)** simulator for UI-only work, **My Mac (Designed for iPad)** for everything-but-the-simulator-can't-run-Metal-ML, or a real iPhone 13+ for the full thing.
-4. ⌘R.
+- **Retrieval** pulls from both the SwiftData-backed `KnowledgeRepository` (notes, imports, web clips) and the markdown-backed `MemoryManager` (tiered persistent memory). `KnowledgeAggregator` merges them.
+- **Context building** formats hits for the prompt with source-aware snippet windows and a hard character cap so retrieved text can't blow through the model's context.
+- **Inference** is one streaming pass through MLX's `ModelContainer` running Gemma 4 E2B. The model decides per-turn whether to emit a tool call via native function-calling tokens.
+- **Skill dispatch** parses the structured output, routes to the `SkillRegistry`, and for any action that touches the outside world (WhatsApp, SMS, email, calls, navigation, rides) surfaces an `ActionConfirmationSheet` before firing.
+- **Memory writes** happen in the background via `KnowledgeBackgroundActor` (for KB) and `MemoryCrystallizer` (for memory consolidation at end of session).
 
-> The first build takes 5–15 minutes. Xcode compiles mlx-swift's Metal shaders, swift-syntax, and the rest of the 15-package SPM graph.
-
-> `xcodebuild` on CI needs `-skipMacroValidation` because the `MLXHuggingFaceMacros` package requires explicit trust in the Xcode UI. In Xcode, click "Trust & Enable" when prompted.
-
-## Requirements
-
-- **iOS 17+** (SwiftData, `NLContextualEmbedding`, `@Observable`, `SFSpeechRecognizer.requiresOnDeviceRecognition`)
-- **Xcode 16+** with Swift 6 strict concurrency
-- **Apple Silicon Mac** for the Metal toolchain needed by MLX (any M1 or later)
-- Real **iPhone 13+** for inference testing — the iOS Simulator can't run MLX's custom Metal shaders
-- ~**2 GB free** on the device (E2B cached after first download)
+---
 
 ## What Eidos can do
 
 | Surface | Behavior |
 |---|---|
-| **Chat** | Gemma 4 E2B streaming responses, memory- and KB-aware context, conversation persistence across launches. |
-| **Voice** | Mic button in chat bar. `SFSpeechRecognizer` with `requiresOnDeviceRecognition = true`. |
-| **Memory** | Tiered MD-file store (P1–P5, core_identity/active/topic/recent/archive) with automatic priority decay and end-of-session crystallization. Full browser UI. Export to zip via Files app. |
-| **Knowledge base** | SwiftData-backed entries with vector + keyword hybrid search (RRF, k=60). Browse/edit/delete. |
-| **Skills** | 13 built-in: calendar read/write, reminders read/create, contacts search, KB search/add, digest, WhatsApp/SMS/Email/Call/Navigate/Ride (action skills queue a confirmation). |
-| **Home** | Morning briefing combining calendar, reminders, memory highlights, and HealthKit insights. Daily notification at a configurable time. |
-| **Settings** | Model status, notification time picker, health permission button, decay pass button, storage counts. |
+| **Chat** | Gemma 4 E2B streaming responses, memory- and KB-aware context, conversation persistence across launches |
+| **Voice** | Mic button in chat bar. `SFSpeechRecognizer` with `requiresOnDeviceRecognition = true` |
+| **Memory** | Tiered MD-file store (P1–P5: core_identity, active, topic, recent, archive) with automatic priority decay and end-of-session crystallization. Full browser UI. Export to zip via Files app |
+| **Knowledge base** | SwiftData-backed entries with vector + keyword hybrid search (RRF, k = 60). Browse, edit, delete |
+| **Skills** | 13 built-in: calendar read/write, reminders read/create, contacts search, KB search/add, digest, WhatsApp, SMS, email, call, navigate, ride (every action behind a confirmation sheet) |
+| **Home** | Morning briefing combining calendar, reminders, memory highlights, and HealthKit insights. Daily notification at a configurable time |
+| **Widget** | Live Activity showing the daily briefing on the lock screen and Dynamic Island |
+| **Shortcuts** | Apple Intents integration — trigger Eidos from Siri, voice, or the Shortcuts app |
+| **Settings** | Model status, notification time, HealthKit permission, decay pass trigger, storage counts |
 
-## Privacy
+---
+
+## Privacy architecture
 
 Eidos has a hard **no-egress** stance. After the one-time model download:
 
-- `EgressGuard` registers a `URLProtocol` that intercepts and blocks all outbound requests that aren't to an allowlisted HuggingFace host during model downloads.
-- On-device speech recognition (`requiresOnDeviceRecognition = true`).
-- HealthKit read access is optional; insights only, never raw samples.
-- Memory files live in the app sandbox Documents directory, never synced, never uploaded.
+- **`EgressGuard`** registers a `URLProtocol` that intercepts outbound requests and blocks anything not on the HuggingFace allowlist (and only during an explicit model download window).
+- **On-device speech recognition** (`requiresOnDeviceRecognition = true`) — audio and transcripts never hit a server.
+- **HealthKit** read access is optional; insights are stored, raw samples never are.
+- **Memory files** live in the app sandbox Documents directory, never synced, never uploaded.
+- **`.completeFileProtection`** on the SwiftData store and App Group queue — readable only when the device is unlocked.
 
-### Honest scope of EgressGuard
+### Honest scope of `EgressGuard`
 
-`URLProtocol.registerClass` only affects sessions that respect URL protocols — which is `URLSession.shared` and `URLSession(configuration: .default)`. The HuggingFace Swift client uses its own URLSession configuration, so the guard doesn't block it (but during a model download that's the only traffic we care about — and we want it). Our own `HuggingFaceDownloader` uses `URLSession.shared`, so the guard applies to it. For production hardening we'd pin HTTPS certificates and audit every dependency's networking. See `KNOWN_LIMITATIONS.md`.
+`URLProtocol.registerClass` only affects sessions that respect URL protocols — which is `URLSession.shared` and `URLSession(configuration: .default)`. The HuggingFace Swift client uses its own `URLSession` configuration, so the guard doesn't block it during model download (the only traffic we want anyway). Our `HuggingFaceDownloader` uses `URLSession.shared`, so the guard applies to it. For production hardening we'd pin HTTPS certificates and audit every dependency's networking. See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for the full gap list.
+
+---
 
 ## Project layout
 
 ```
 Eidos/
   App/                    # @main, container, tab router, feature tour
+    AppIntents/           # Apple Shortcuts / Siri integration
   Inference/              # MLX Swift session, HF downloader, prompt templates
   Embedding/              # NLContextualEmbedding wrapper, vector store
   KnowledgeBase/          # SwiftData models, repository, background actor
   RAG/                    # ContextBuilder, RAGPipeline
-  Memory/                 # Entry, Manager, Index, DecayEngine, Crystallizer, Exporter
-  Skills/                 # Tool-calling protocol + built-in skills (incl. AppActionSkills)
-  Platform/               # EventKit, Contacts, HealthKit, Speech, AppAction registry,
-                          # NotificationScheduler, EgressGuard
+  Memory/                 # Entry, Manager, Index, DecayEngine, Crystallizer,
+                          #   Aggregator, Exporter, Frontmatter
+  Skills/                 # Tool-calling protocol + 13 built-in skills
+  Platform/               # EventKit, Contacts, HealthKit, Speech, Location,
+                          #   Motion, Music, Focus, AppAction registry,
+                          #   NotificationScheduler, LiveActivityManager,
+                          #   EgressGuard
   Ingestion/              # WhatsApp / mail / plain-text importers, coordinator
   Digest/                 # DigestGenerator, ProactiveDigestGenerator
   UI/                     # SwiftUI views & view models
   Resources/              # Info.plist, entitlements
-EidosShareExtension/      # Share Extension target (scaffold — real impl deferred)
+EidosShared/              # Code shared between app and widget
+EidosWidget/              # Widget + Live Activity extension
+EidosShareExtension/      # Share Extension target (scaffold; real impl deferred)
 EidosTests/               # Unit + integration tests (120+)
 ```
 
-## Testing
+---
 
-```bash
-xcodebuild -project Eidos.xcodeproj -scheme Eidos \
-  -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -skipMacroValidation test
-```
+## Reference documents
 
-Tests run on the simulator even though inference doesn't work there — everything we test is pure logic or uses in-memory SwiftData / temp filesystem.
-
-## License
-
-TBD.
+- [masterplan.md](masterplan.md) — active strategic roadmap, phase-by-phase status
+- [architecture.md](architecture.md) — canonical type/file/UI spec
+- [notes.md](notes.md) — research findings and design constraints
+- [research.md](research.md) — exploratory deep-dives (agent loop, vectorless RAG)
+- [history.md](history.md) — chronological project record
+- [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) — honest inventory of gaps and deferred work
+- [SHORTCUTS.md](SHORTCUTS.md) — user documentation for Apple Shortcuts / AppIntents
