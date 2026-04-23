@@ -3,6 +3,7 @@ import SwiftUI
 enum AppTab: Hashable {
     case home
     case chat
+    case memory
     case knowledgeBase
     case ingest
     case settings
@@ -29,6 +30,10 @@ struct RootView: View {
             .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
             .tag(AppTab.chat)
 
+            MemoryBrowserView()
+                .tabItem { Label("Memory", systemImage: "brain") }
+                .tag(AppTab.memory)
+
             KBBrowserView()
                 .tabItem { Label("Knowledge", systemImage: "books.vertical") }
                 .tag(AppTab.knowledgeBase)
@@ -40,6 +45,11 @@ struct RootView: View {
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gear") }
                 .tag(AppTab.settings)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .eidosJumpToTab)) { note in
+            if let tab = note.object as? AppTab {
+                withAnimation { router.selectedTab = tab }
+            }
         }
     }
 }

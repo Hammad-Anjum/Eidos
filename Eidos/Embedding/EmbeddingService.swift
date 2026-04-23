@@ -66,10 +66,17 @@ actor EmbeddingService {
             throw EmbeddingError.modelUnavailable(language: language.rawValue)
         }
         guard !emb.hasAvailableAssets else { return }
-        do {
-            try await emb.requestEmbeddingAssets()
-        } catch {
-            throw EmbeddingError.assetDownloadFailed(error.localizedDescription)
+        let request = NLContextualEmbedding.requestAssets(emb)
+        let result = try await request()
+        switch result {
+        case .available:
+            break
+        case .notAvailable:
+            throw EmbeddingError.assetDownloadFailed("Embedding assets unavailable for \(language.rawValue).")
+        case .error:
+            throw EmbeddingError.assetDownloadFailed("Unknown error while requesting embedding assets for \(language.rawValue).")
+        @unknown default:
+            throw EmbeddingError.assetDownloadFailed("Unexpected asset request result for \(language.rawValue).")
         }
     }
 
@@ -171,3 +178,4 @@ actor EmbeddingService {
         return result
     }
 }
+

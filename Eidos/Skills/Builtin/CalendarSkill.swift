@@ -12,7 +12,12 @@ struct CalendarSkill: Skill {
     }
 
     func invoke(parameters: [String: AnyCodable]) async -> SkillResult {
-        // TODO(phase 4)
-        .failure("CalendarSkill not yet implemented")
+        let daysAhead = parameters["days_ahead"]?.intValue ?? 7
+        let events = await source.fetchEvents(daysAhead: daysAhead)
+        if events.isEmpty {
+            return .success("No events scheduled in the next \(daysAhead) days.")
+        }
+        let lines = events.prefix(20).map { "• \($0.readableDescription)" }
+        return .success(lines.joined(separator: "\n"))
     }
 }

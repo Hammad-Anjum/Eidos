@@ -135,20 +135,118 @@ Updated [plan.md](plan.md) to mirror the approved Phase 2 plan: dropped the Wind
 
 ---
 
+## 2026-04-12 → 2026-04-23 — Mac-side sprint: phases 2–7 scoped
+
+After Phase 2 planning was approved, the macOS co-founder (Hissamuddin) ran an eleven-day sprint that shipped a scoped version of the remaining roadmap. The Windows side continued as reference only; the Mac side became authoritative. This entry summarises what landed.
+
+### Phase 2 — Inference (MLX Swift + Gemma 4)
+
+- Swapped the planned `mlx-swift-examples` dependency for the more focused `mlx-swift-lm` package, plus `huggingface/swift-transformers` and `huggingface/swift-huggingface`. Three SPM packages, no CocoaPods.
+- `HuggingFaceDownloader.swift` replaced the `ModelDownloader` stub. Uses `swift-huggingface` directly instead of wrapping MLX's Hub snapshot API.
+- `GemmaSession` wired up against `MLXLLM` / `MLXLMCommon` / `MLXHuggingFace`. Streaming via `AsyncThrowingStream` as designed.
+- `Eidos.xcodeproj` now generates cleanly from `project.yml` (191 lines, 5 targets).
+- Bundle ID convention settled: `com.hissamuddin.eidos` (not the placeholder `com.eidos.app`). App Group: `group.com.hissamuddin.eidos`.
+- Real-device validation still pending per README.
+
+### Phase 3 — Memory system + RAG + voice + KB
+
+- Introduced a **new `Memory/` layer** not in the original spec: eight files implementing a tiered priority-based memory store (P1–P5: core_identity, active, topic, recent, archive). Markdown files on disk as the source of truth.
+  - `MemoryEntry`, `MemoryManager`, `MemoryIndex` — model + coordinator + index
+  - `MemoryDecayEngine` — automatic priority decay so old memories fade
+  - `MemoryCrystallizer` — end-of-session consolidation (summarises recent context into longer-lived entries)
+  - `KnowledgeAggregator` — unifies KB entries and memory entries for retrieval
+  - `MemoryExporter` — zips memory directory for Files-app export
+  - `MemoryFrontmatter` — YAML frontmatter parsing/writing for the Markdown files
+- `RAGPipeline` + `ContextBuilder` implemented around the hybrid RRF search from Phase 1, now pulling from both `KnowledgeRepository` and `MemoryManager`.
+- `SpeechTranscriber` wired into chat bar with `requiresOnDeviceRecognition = true`.
+- Full KB browser UI: `KBBrowserView`, `KBEntryDetailView` with edit/delete.
+- Full Memory browser UI under `Eidos/UI/Memory/`.
+
+### Phase 4 — Platform sources + skills + home/digest
+
+Platform layer expanded from 5 files to 14. New sources:
+- `HealthSource` — optional HealthKit read (sleep, steps, heart rate, active energy). Insights only, never raw samples.
+- `LocationSource` — significant-change only, never tracks path.
+- `MotionSource` — activity + step count for briefing context.
+- `MusicSource` — recently-played for ambient briefing colour.
+- `FocusObserver` — respects Focus modes.
+- `NotificationScheduler` — daily briefing at a configurable time.
+- `LiveActivityManager` — coordinates the Live Activity lifecycle.
+- `AppAction` + `AppActionRegistry` — registry of user-confirmed outbound actions.
+
+Skills expanded from 6 to **13**:
+- Core: `CalendarSkill` (read/write), `RemindersSkill` (read/create), `ContactsSkill`, `SearchKBSkill`, `AddNoteSkill`, `DigestSkill`.
+- App Actions (`AppActionSkills.swift`): WhatsApp, SMS, Email, Call, Navigate, Ride. Every app action goes through an `ActionConfirmationSheet` before dispatch — no silent sends.
+
+Home + Digest: `HomeView` shows the morning briefing; `DigestGenerator` plus `ProactiveDigestGenerator` weave calendar, reminders, memory highlights, and HealthKit insights.
+
+### Phase 5 — App actions + importers
+
+- `AppIntents/` added (`EidosAppShortcuts.swift`, `EidosIntents.swift`) — Apple Shortcuts integration so users can trigger Eidos from Siri / voice / Shortcuts app.
+- Importer trio stayed: `WhatsAppImporter`, `MailImporter`, `PlainTextImporter`, plus `IngestionCoordinator`.
+- `EidosShareExtension` scaffold is in place; real implementation deferred to Phase 6.x per `masterplan.md`.
+
+### Phase 6 — Proactive intelligence + HealthKit + notifications
+
+- `ProactiveDigestGenerator` for briefings composed from multiple sources.
+- Live Activity widget (`EidosWidget` target) shows the daily digest on the lock screen / Dynamic Island.
+- `NotificationScheduler` drives the daily briefing local notification.
+- `FeatureTourView` — first-run orientation overlay.
+- Per `masterplan.md`, three sub-phases deferred: 6.1 routine learner, 6.4 life log, 6.5 tone engine.
+
+### Phase 7 — Polish + tests
+
+**Test coverage**: 13 new test files, 120+ tests total passing:
+- `AppActionTests`, `ContextBuilderTests`, `EgressGuardTests`, `HealthInsightTests`, `ImporterTests`
+- `MemoryCrystallizerTests`, `MemoryDecayEngineTests`, `MemoryIndexTests`, `MemoryManagerTests`
+- `NotificationSchedulerTests`, `PromptTemplatesTests`, `RAGIntegrationTests`, `SkillsTests`
+- Plus the existing `RRFusionTests`, `TextChunkerTests`, `VectorStoreTests` from Phase 1.
+
+**UI polish**: `AIGlowBorder` component, `UserFacingError` type for consistent error surfaces, refined onboarding and settings.
+
+### New targets
+
+- `EidosShared/` — code shared between the app and the widget (`SharedStore.swift`, `DigestActivityAttributes.swift`, `WidgetDigestSnapshot.swift`).
+- `EidosWidget/` — widget extension: `DigestLiveActivity.swift`, `DigestWidget.swift`, `DigestWidgetView.swift`, `EidosControls.swift`, `EidosWidgetBundle.swift`.
+
+### New project docs
+
+- `masterplan.md` — consolidated strategic roadmap, supersedes the day-to-day role of `plan.md`.
+- `KNOWN_LIMITATIONS.md` — honest accounting of gaps (e.g. `EgressGuard`'s scope only covers `URLSession.shared`, not custom-configured sessions).
+- `SHORTCUTS.md` — user documentation for the AppIntents / Shortcuts surface.
+
+### Removed
+
+- `Podfile` — MLX is SPM-only, planned deletion executed.
+
+### Sync operation (2026-04-23)
+
+The macOS work arrived as `Eidos-main.zip` (unpacked to `Eidos-main/` alongside `__MACOSX/`). The sync was a wholesale replacement:
+
+1. Deleted stale Windows-side `Podfile`, `Eidos/`, `EidosShareExtension/`, `EidosTests/` at the repo root.
+2. Copied `Eidos-main/.` contents to the repo root (including hidden `.gitignore`).
+3. Removed `Eidos-main/` and `__MACOSX/` staging directories.
+4. Verified `Eidos.xcodeproj/` is gitignored (matched by `*.xcodeproj`).
+
+Final `git status`: 1 deletion (`Podfile`), ~48 modifications, ~35 new untracked paths (new folders like `EidosShared/`, `EidosWidget/`, `Eidos/Memory/`, `Eidos/App/AppIntents/`, `Eidos/UI/Memory/`, plus the new Platform / Skill / UI / Test files and the three new root docs).
+
+---
+
 ## Current state
 
-**Done**:
-- Phase 0 — Scaffolding (66 files, project.yml, all stubs compile against `AppContainer`)
-- Phase 1 — Persistence + Embeddings + Repository (`NLContextualEmbedding`, `@ModelActor`, hybrid RRF search, content-hash dedup, real unit tests)
+**Done** (scoped form, per `masterplan.md`):
+- Phase 0 — Scaffolding
+- Phase 1 — Persistence + embeddings + hybrid RRF
+- Phase 2 — Inference (MLX Swift + Gemma 4). Real-device validation pending.
+- Phase 3 — Memory system + RAG + voice + KB browser
+- Phase 4 — Platform sources + 13 skills + home/digest (4.3 relationship intel, 4.4 notifications deferred to 6.x)
+- Phase 5 — App actions + importers (5.2 real share-ext implementation, 5.4 richer App Intents deferred)
+- Phase 6 — Proactive intelligence + HealthKit + notifications (6.1 routine learner, 6.4 life log, 6.5 tone engine deferred)
+- Phase 7 — Polish + tests + ship-readiness (120+ tests passing)
 
 **Active**:
-- Phase 2 planning is **complete and approved**. Ready for execution. First step: 2.0 (add `mlx-swift-examples` SPM dependency to `project.yml`, delete `Podfile`).
-
-**Pending**:
-- Phase 3 — RAG + single-pass chat with tools
-- Phase 4 — iOS platform sources + skills (Calendar, Contacts, all 6 built-ins)
-- Phase 5 — Share Extension + ingestion (WhatsApp + mbox importers)
-- Phase 6 — Polish + tests (Settings, BG digest, app icon, full smoke suite)
+- Real-device validation on iPhone 13+ (the one thing the Simulator can't verify — MLX Metal shaders don't run there).
+- Deferred features flagged in `masterplan.md` for pickup as "phase 6.x" follow-ups.
 
 ---
 
@@ -170,13 +268,28 @@ A condensed list of every direction change in the project so far. Each entry is 
 12. **Chat empty state**: "warming up..." (initial draft) → **"Model not installed — download in Settings."** *(User feedback: don't mislead users about whether download is necessary.)*
 13. **Model storage location**: `~/Documents/Models/` (spec) → **`~/Library/Application Support/Models/`**. *(Invisible to Files app; same on-device guarantees.)*
 14. **Model warmup**: sync in onboarding (initial draft) → **async in bootstrap, with `ChatView` loading state**. *(More forgiving UX.)*
+15. **MLX package**: `mlx-swift-examples` (Phase 2 plan) → **`mlx-swift-lm`** (Mac sprint). *(More focused surface, same ecosystem.)*
+16. **Model download stack**: custom `ModelDownloader` wrapping MLX Hub (plan) → **`HuggingFaceDownloader`** using `swift-huggingface` directly. *(Fewer abstractions.)*
+17. **Bundle ID / App Group**: `com.eidos.app` / `group.com.eidos.shared` (placeholder) → **`com.hissamuddin.eidos` / `group.com.hissamuddin.eidos`**. *(Personal developer team convention.)*
+18. **Skills count**: 6 built-in (plan) → **13 built-in** (Mac sprint). Added App Actions: WhatsApp, SMS, Email, Call, Navigate, Ride — all gated behind `ActionConfirmationSheet`. *(Agentic scope expanded.)*
+19. **Memory model**: flat KB only (plan) → **tiered priority memory (P1–P5) alongside the KB**. Markdown-on-disk store with automatic decay and end-of-session crystallisation. *(Richer long-term behaviour.)*
+20. **Widget / Live Activity**: not in plan → **`EidosWidget` target with Live Activity for the daily briefing**. *(Lock-screen presence.)*
+21. **Apple Shortcuts**: not in plan → **`AppIntents` integration** for voice / Siri / Shortcuts app triggers. *(Hands-free access surface.)*
+22. **HealthKit**: not in plan → **optional health read** (sleep, steps, heart rate, active energy). Insights only, raw samples never persisted. *(Briefing personalisation.)*
+23. **Primary plan doc**: `plan.md` → **`masterplan.md`**. *(Running roadmap document managed by the Mac side; `plan.md` remains as historical reference.)*
 
 ---
 
 ## Index of project documents
 
+Four reference docs, plus user-facing surface docs:
+
 - [architecture.md](architecture.md) — canonical type/file/UI spec from the user. **Untouched** since project genesis. The "what we're building" reference.
-- [plan.md](plan.md) — active build plan with Status, phase definitions, and Phase 2 detail. The "where we're going" reference.
+- [masterplan.md](masterplan.md) — **active strategic roadmap** (Mac-side). Primary build plan going forward. Supersedes `plan.md` as the day-to-day reference.
+- [plan.md](plan.md) — earlier build plan covering phases 0–2. Retained for historical context; see `masterplan.md` for current direction.
 - [notes.md](notes.md) — living research findings and design constraints. The "what we know is true" reference. Updated as we learn things.
+- [research.md](research.md) — exploratory architectural deep-dives being evaluated (OpenClaw-style agent loop, PageIndex / vectorless RAG).
 - [history.md](history.md) — this file. The "why we got here" record. Appended at meaningful turning points.
-- [README.md](README.md) — Mac handoff instructions and project layout.
+- [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) — honest accounting of known gaps and deferred work.
+- [SHORTCUTS.md](SHORTCUTS.md) — user documentation for the Apple Shortcuts / AppIntents surface.
+- [README.md](README.md) — build instructions, requirements, project layout.

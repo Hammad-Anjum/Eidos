@@ -41,20 +41,18 @@ final class TextChunkerTests: XCTestCase {
     }
 
     func testChunksCoverAllInput() {
-        let chunker = TextChunker(chunkSize: 10, stride: 8)
+        let chunkSize = 10
+        let stride = 8
+        let chunker = TextChunker(chunkSize: chunkSize, stride: stride)
         let text = "abcdefghijklmnopqrstuvwxy"
         let chunks = chunker.chunk(text)
 
-        // The union of chunks must reconstruct every character in `text`.
-        // Reconstruct by walking the chunks and tracking forward progress.
-        var reconstructed = ""
-        var cursor = 0
-        for chunk in chunks {
-            // The chunk starts at `cursor - overlap` (after the first one).
-            let overlap = max(0, reconstructed.count - cursor)
-            let newSlice = chunk.dropFirst(overlap)
-            reconstructed += newSlice
-            cursor = reconstructed.count
+        // Reconstruct by taking the first chunk in full, then dropping the
+        // fixed overlap (chunkSize - stride) from each subsequent chunk.
+        let overlap = chunkSize - stride
+        var reconstructed = chunks.first ?? ""
+        for chunk in chunks.dropFirst() {
+            reconstructed += chunk.dropFirst(overlap)
         }
         XCTAssertEqual(reconstructed, text)
     }

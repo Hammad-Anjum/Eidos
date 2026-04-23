@@ -12,7 +12,20 @@ struct SearchKBSkill: Skill {
     }
 
     func invoke(parameters: [String: AnyCodable]) async -> SkillResult {
-        // TODO(phase 4)
-        .failure("SearchKBSkill not yet implemented")
+        guard let query = parameters["query"]?.stringValue, !query.isEmpty else {
+            return .failure("Missing required parameter: query")
+        }
+        let topK = parameters["top_k"]?.intValue ?? 5
+
+        do {
+            let hits = try await repo.search(query: query, topK: topK)
+            if hits.isEmpty {
+                return .success("No matches for '\(query)'.")
+            }
+            let lines = hits.map { "• \($0.snippet)" }
+            return .success(lines.joined(separator: "\n"))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
     }
 }

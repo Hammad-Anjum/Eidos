@@ -18,6 +18,17 @@ final class AppContainer {
     let digestGenerator: DigestGenerator
     let ingestionCoordinator: IngestionCoordinator
     let modelDownloader: ModelDownloader
+    let memoryManager: MemoryManager
+    let memoryDecayEngine: MemoryDecayEngine
+    let memoryCrystallizer: MemoryCrystallizer
+    let appActionRegistry: AppActionRegistry
+    let healthSource: HealthSource
+    let notificationScheduler: NotificationScheduler
+    let proactiveDigestGenerator: ProactiveDigestGenerator
+    let locationSource: LocationSource
+    let motionSource: MotionSource
+    let liveActivityManager: LiveActivityManager
+    var isBootstrapped = false
 
     init() throws {
         let schema = Schema([
@@ -28,8 +39,6 @@ final class AppContainer {
             IngestionLog.self,
         ])
 
-        // B6: force complete file protection on the SwiftData store so
-        // the knowledge base is unreadable while the device is locked.
         let config = ModelConfiguration(
             schema: schema,
             isStoredInMemoryOnly: false
@@ -50,13 +59,30 @@ final class AppContainer {
             backgroundActor: knowledgeBackgroundActor
         )
 
+        let memoryManager = MemoryManager()
+        let digestGenerator = DigestGenerator(
+            calendarSource: calendarSource,
+            knowledgeRepo: knowledgeRepo,
+            memoryManager: memoryManager,
+            gemma: gemma
+        )
+
+        let appActionRegistry = AppActionRegistry()
+
         let skills: [any Skill] = [
             CalendarSkill(source: calendarSource),
             RemindersSkill(source: calendarSource),
+            CreateReminderSkill(source: calendarSource),
             ContactsSkill(source: contactsSource),
             SearchKBSkill(repo: knowledgeRepo),
             AddNoteSkill(repo: knowledgeRepo),
-            DigestSkill(),
+            DigestSkill(digestGenerator: digestGenerator),
+            SendWhatsAppSkill(registry: appActionRegistry),
+            SendSMSSkill(registry: appActionRegistry),
+            SendEmailSkill(registry: appActionRegistry),
+            PlaceCallSkill(registry: appActionRegistry),
+            NavigateSkill(registry: appActionRegistry),
+            RequestRideSkill(registry: appActionRegistry),
         ]
         let skillRegistry = SkillRegistry(skills: skills)
 
@@ -68,55 +94,73 @@ final class AppContainer {
         self.contactsSource = contactsSource
         self.knowledgeRepo = knowledgeRepo
         self.skillRegistry = skillRegistry
+        self.memoryManager = memoryManager
+        self.memoryDecayEngine = MemoryDecayEngine(manager: memoryManager)
+        self.memoryCrystallizer = MemoryCrystallizer(gemma: gemma, manager: memoryManager)
+        self.appActionRegistry = appActionRegistry
+        let healthSource = HealthSource()
+        self.healthSource = healthSource
+        self.notificationScheduler = NotificationScheduler()
+        self.locationSource = LocationSource()
+        self.motionSource = MotionSource()
+        self.liveActivityManager = LiveActivityManager()
+        self.proactiveDigestGenerator = ProactiveDigestGenerator(
+            calendarSource: calendarSource,
+            memoryManager: memoryManager,
+            healthSource: healthSource,
+            gemma: gemma
+        )
         self.ragPipeline = RAGPipeline(
             gemma: gemma,
             knowledgeRepo: knowledgeRepo,
+            memoryManager: memoryManager,
             skillRegistry: skillRegistry
         )
-        self.digestGenerator = DigestGenerator(
-            calendarSource: calendarSource,
-            knowledgeRepo: knowledgeRepo,
-            gemma: gemma
-        )
+        self.digestGenerator = digestGenerator
         self.ingestionCoordinator = IngestionCoordinator(repo: knowledgeRepo)
-        self.modelDownloader = ModelDownloader()
+        self.modelDownloader = ModelDownloader(gemma: gemma)
     }
 
-    /// Kicks off work that requires async setup — called from `.task` on
-    /// the root view so it never blocks the window scene.
+    /// Async setup — called from `.task` on the root view.
     ///
-    /// Per plan.md §A3-asset, the order is deliberate:
-    ///
-    /// 1. Load the in-memory vector index from the SwiftData store.
-    /// 2. If the NLContextualEmbedding asset isn't cached yet, download it
-    ///    from Apple's CDN. This is the ONE moment in the app's lifetime
-    ///    where we allow that specific egress, and it happens BEFORE
-    ///    EgressGuard is armed.
-    /// 3. Load the embedding model into memory.
-    /// 4. If the Gemma model is already on disk, warm it up. (Actual
-    ///    model download goes through ModelDownloader, which temporarily
-    ///    opens the Hugging Face host through EgressGuard.)
-    /// 5. Arm EgressGuard with the permanent allowlist. From this point
-    ///    on, all outbound traffic is blocked unless the guard explicitly
-    ///    opens a hole (currently only ModelDownloader does this).
+    /// Order matters:
+    /// 1. Load vector index from SwiftData
+    /// 2. Load embedding model (if assets available)
+    /// 3. If a model was previously downloaded, warm it up
+    /// 4. Arm EgressGuard — all outbound traffic blocked from here on
     func bootstrap() async {
         await knowledgeRepo.loadVectorStoreFromDB()
+        try? await memoryManager.rebuildIndex()
 
-        // A3-asset: download embedding weights while the network is still
-        // usable. Failures are non-fatal — the user can retry from Settings
-        // once they're online. Semantic search will fall back to keyword
-        // search via KnowledgeRepository.search until this succeeds.
+        // NLContextualEmbedding asset download fails in the iOS Simulator
+        // (permission denied on `/var/db/com.apple.naturallanguaged`). On
+        // device, Apple's CDN delivers the asset on first launch.
+        #if !targetEnvironment(simulator)
         if await !embeddingService.hasAssets() {
             try? await embeddingService.ensureAssetsAvailable()
         }
-        try? await embeddingService.load()
+        if await embeddingService.hasAssets() {
+            try? await embeddingService.load()
+        }
+        #endif
 
-        if let path = modelDownloader.modelPath(for: .e4b) {
-            try? await gemma.load(modelPath: path.path, config: ModelConfig())
+        // Load the cached model. If the files are missing (user wiped
+        // Documents, etc.) clear the flag so onboarding shows again.
+        if modelDownloader.isModelDownloaded {
+            do {
+                try await gemma.load(variant: modelDownloader.selectedVariant)
+            } catch {
+                UserDefaults.standard.set(false, forKey: "eidos.modelDownloaded")
+            }
         }
 
-        // B14: arm the egress guard after asset bring-up so the NL asset
-        // fetch above isn't blocked on first launch.
+        // If the user has morning digest enabled, make sure it's scheduled.
+        // Safe to call repeatedly — it removes+re-adds the pending request.
+        if notificationScheduler.digestEnabled {
+            await notificationScheduler.scheduleMorningDigest()
+        }
+
         EgressGuard.install()
+        isBootstrapped = true
     }
 }

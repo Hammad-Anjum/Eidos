@@ -48,8 +48,10 @@ final class VectorStoreTests: XCTestCase {
         let target = UUID()
         await store.add(embeddingID: UUID(), entryID: target, chunkText: "a", vector: [1, 0, 0])
         await store.add(embeddingID: UUID(), entryID: target, chunkText: "b", vector: [0, 1, 0])
-        XCTAssertEqual(await store.count, 2)
+        let beforeCount = await store.count
+        XCTAssertEqual(beforeCount, 2)
         await store.remove(entryID: target)
-        XCTAssertEqual(await store.count, 0)
+        let afterCount = await store.count
+        XCTAssertEqual(afterCount, 0)
     }
 }

@@ -5,10 +5,7 @@ struct ToolCall: Decodable, Sendable {
     let parameters: [String: AnyCodable]
 }
 
-// Per plan.md §A2, this parser reads Gemma 4's native function-call
-// output format. The exact token-level shape of a function call is
-// determined by the LiteRT-LM constrained-decoding API and fixed in
-// Phase 2 — this stub exists so the rest of the pipeline compiles.
+/// Parses Gemma 4's native function-call JSON from the token stream.
 struct SkillParser {
     func parse(_ output: String) -> ToolCall? {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)

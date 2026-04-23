@@ -3,7 +3,7 @@ import Foundation
 // Shared read/write helpers for the App Group container that Eidos and the
 // Share Extension both use. Group ID: group.com.eidos.shared (B4 rename).
 enum AppGroupStore {
-    static let appGroupID = "group.com.eidos.shared"
+    static let appGroupID = "group.com.hissamuddin.eidos"
 
     static var container: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)

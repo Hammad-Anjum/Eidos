@@ -1,6 +1,7 @@
 import XCTest
 @testable import Eidos
 
+@MainActor
 final class RRFusionTests: XCTestCase {
 
     func testEmptyRankingsProduceNoResults() {

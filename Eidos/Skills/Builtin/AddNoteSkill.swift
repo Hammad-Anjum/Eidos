@@ -12,7 +12,26 @@ struct AddNoteSkill: Skill {
     }
 
     func invoke(parameters: [String: AnyCodable]) async -> SkillResult {
-        // TODO(phase 4)
-        .failure("AddNoteSkill not yet implemented")
+        guard let content = parameters["content"]?.stringValue, !content.isEmpty else {
+            return .failure("Missing required parameter: content")
+        }
+        let tags = (parameters["tags"]?.arrayValue ?? [])
+            .compactMap { $0.stringValue }
+
+        do {
+            let result = try await repo.insert(
+                content: content,
+                source: .skillOutput,
+                tags: tags
+            )
+            switch result {
+            case .inserted:
+                return .success("Noted.")
+            case .skippedDuplicate:
+                return .success("Already in your notes — skipped.")
+            }
+        } catch {
+            return .failure(error.localizedDescription)
+        }
     }
 }

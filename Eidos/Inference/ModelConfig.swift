@@ -1,57 +1,71 @@
 import Foundation
 
-// Gemma 4 variants hosted by the LiteRT community on Hugging Face.
-// Exact file names, sizes, and SHA256 hashes must be verified during Phase 2
-// against the live repos. See plan.md §A1.
+enum DeviceClass: Sendable {
+    case standard  // 4-6 GB RAM (iPhone 13, 14, 15)
+    case pro       // 8+ GB RAM (iPhone 15 Pro, 16, 16 Pro)
+
+    static var current: DeviceClass {
+        ProcessInfo.processInfo.physicalMemory >= 7_500_000_000 ? .pro : .standard
+    }
+}
+
 enum GemmaVariant: String, CaseIterable, Sendable {
-    case e2b = "gemma-4-E2B-it-litert-lm.task"
-    case e4b = "gemma-4-E4B-it-litert-lm.task"
+    // HuggingFace's `resolve/main/` endpoint is case-sensitive — these
+    // must match the canonical lowercase paths of the mlx-community repos.
+    case e2b = "mlx-community/gemma-4-e2b-it-4bit"
+    case e4b = "mlx-community/gemma-4-e4b-it-4bit"
 
     var displayName: String {
         switch self {
-        case .e2b: return "Gemma 4 E2B (faster, ~1.5 GB)"
-        case .e4b: return "Gemma 4 E4B (smarter, ~3 GB)"
+        case .e2b: "Gemma 4 E2B (faster, ~3.4 GB)"
+        case .e4b: "Gemma 4 E4B (smarter, ~5.3 GB)"
         }
     }
 
-    var recommendedFor: String {
+    var huggingFaceID: String { rawValue }
+
+    /// Subdirectory inside `Documents/` where weights are stored locally.
+    var localDirectoryName: String {
         switch self {
-        case .e2b: return "iPhone 13 or later"
-        case .e4b: return "iPhone 15 Pro or later"
+        case .e2b: "gemma-e2b"
+        case .e4b: "gemma-e4b"
         }
     }
 
-    // TODO(phase 2): Pin exact file names and hashes from huggingface.co/litert-community
-    var downloadURL: URL {
-        let base = "https://huggingface.co/litert-community"
+    /// Approximate total bytes across all files in the HF repo (weights
+    /// + tokenizer + configs). Used for the disk-space preflight, so
+    /// we intentionally round generously.
+    var approximateDiskBytes: Int64 {
         switch self {
-        case .e2b: return URL(string: "\(base)/gemma-4-E2B-it-litert-lm/resolve/main/\(rawValue)")!
-        case .e4b: return URL(string: "\(base)/gemma-4-E4B-it-litert-lm/resolve/main/\(rawValue)")!
+        case .e2b: 3_500_000_000   // ~3.3 GB weights + 31 MB tokenizer + configs
+        case .e4b: 5_500_000_000   // ~5.25 GB weights + configs
         }
     }
 
-    // TODO(phase 2): Fill in the real SHA256 for B7 integrity checking.
-    var expectedSHA256: String? {
-        nil
-    }
-
-    var approximateByteCount: Int64 {
+    var requiredDeviceClass: DeviceClass {
         switch self {
-        case .e2b: return 1_500_000_000
-        case .e4b: return 3_000_000_000
+        case .e2b: .standard
+        case .e4b: .pro
         }
+    }
+
+    var isAvailableOnThisDevice: Bool {
+        switch (requiredDeviceClass, DeviceClass.current) {
+        case (.standard, _): true
+        case (.pro, .pro): true
+        case (.pro, .standard): false
+        }
+    }
+
+    static var defaultForDevice: GemmaVariant {
+        DeviceClass.current == .pro ? .e4b : .e2b
     }
 }
 
 struct ModelConfig: Sendable {
-    var variant: GemmaVariant = .e4b
+    var variant: GemmaVariant = .defaultForDevice
     var maxTokens: Int = 1024
     var temperature: Float = 0.7
-    var topK: Int = 40
     var topP: Float = 0.95
-    var maxContextTokens: Int = 8192
-
-    // A2: Enables Gemma 4 native function calling via constrained decoding.
-    // Filled in against the real LiteRT-LM API in Phase 2.
-    var toolSchemasJSON: String? = nil
+    var toolSchemasJSON: String?
 }

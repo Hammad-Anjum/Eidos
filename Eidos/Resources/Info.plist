@@ -2,56 +2,80 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>$(DEVELOPMENT_LANGUAGE)</string>
-    <key>CFBundleDisplayName</key>
-    <string>Eidos</string>
-    <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
-    <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>$(PRODUCT_NAME)</string>
-    <key>CFBundlePackageType</key>
-    <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>LSRequiresIPhoneOS</key>
-    <true/>
-    <key>UILaunchScreen</key>
-    <dict/>
-    <key>UIRequiredDeviceCapabilities</key>
-    <array>
-        <string>arm64</string>
-    </array>
-    <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-    </array>
-
-    <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>Eidos reads your calendar to include events in your daily digest and answer questions about your schedule. Calendar data never leaves your device.</string>
-
-    <key>NSRemindersFullAccessUsageDescription</key>
-    <string>Eidos reads your reminders to help you stay on top of tasks. Reminders never leave your device.</string>
-
-    <key>NSContactsUsageDescription</key>
-    <string>Eidos reads your contacts to help answer questions about people you know. Contact data never leaves your device.</string>
-
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Eidos transcribes your voice notes entirely on-device using Apple's speech recognition. Audio and transcripts never leave your device.</string>
-
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Eidos uses the microphone to record voice notes for on-device transcription.</string>
-
-    <key>UIFileSharingEnabled</key>
-    <true/>
-
-    <key>LSSupportsOpeningDocumentsInPlace</key>
-    <true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.hissamuddin.eidos</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>eidos</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+		<string>sms</string>
+		<string>mailto</string>
+		<string>tel</string>
+		<string>maps</string>
+		<string>comgooglemaps</string>
+		<string>uber</string>
+		<string>facetime</string>
+	</array>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Eidos can weave your recently-played Apple Music into your briefing. Music history never leaves your iPhone.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Eidos reads your calendar to give you context-aware briefings and reminders. Event data never leaves your iPhone.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Eidos uses your contacts to understand who you mean when you say names. Contact data never leaves your iPhone.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Eidos reads a minimal set of health metrics (sleep, steps, heart rate, active energy) to personalize your morning briefing. Data never leaves your iPhone — only insights are stored.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Eidos doesn't write to HealthKit. This permission is required by iOS when requesting any health access.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>For ambient place memory, allow Always. Eidos records only significant changes — never your exact path — and only on-device.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Eidos notes the places you go (home, work, gym) so your briefing knows your context. Location never leaves your iPhone.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Eidos transcribes your voice on-device so you can chat hands-free. Audio never leaves your iPhone.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Eidos uses motion activity (walking, running, driving) and step count to personalize your briefing. Never leaves your iPhone.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Eidos reads and creates reminders on your behalf. Reminder data never leaves your iPhone.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Eidos uses Apple's on-device speech recognition to turn your voice into text. Your speech is never sent to a server.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
+	<key>UIRequiresFullScreen</key>
+	<false/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
 </dict>
 </plist>

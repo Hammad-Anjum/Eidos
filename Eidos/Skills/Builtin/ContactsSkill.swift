@@ -12,7 +12,20 @@ struct ContactsSkill: Skill {
     }
 
     func invoke(parameters: [String: AnyCodable]) async -> SkillResult {
-        // TODO(phase 4)
-        .failure("ContactsSkill not yet implemented")
+        guard let query = parameters["query"]?.stringValue, !query.isEmpty else {
+            return .failure("Missing required parameter: query")
+        }
+        let results = await source.search(query: query, limit: 5)
+        if results.isEmpty {
+            return .success("No contacts match '\(query)'.")
+        }
+        let lines = results.map { contact -> String in
+            var line = "• \(contact.displayName)"
+            if let org = contact.organization { line += " (\(org))" }
+            if let email = contact.emails.first { line += " · \(email)" }
+            if let phone = contact.phones.first { line += " · \(phone)" }
+            return line
+        }
+        return .success(lines.joined(separator: "\n"))
     }
 }
