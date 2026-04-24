@@ -1,0 +1,76 @@
+# --- Android / Gradle ---
+.gradle/
+build/
+*/build/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+gradle-app.setting
+.gradletasknamecache
+
+# --- Android Studio / IntelliJ ---
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# --- Keystores / Secrets (never commit) ---
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+upload-keystore.*
+google-services.json
+release/
+
+# --- Build artifacts ---
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.hprof
+proguard/
+release-notes/
+
+# --- Native build ---
+obj/
+.cxx/
+*.o
+*.so.debug
+
+# --- Kotlin / KSP / KAPT ---
+.kotlin/
+kotlin-js-store/
+
+# --- Test / Coverage ---
+.test-results/
+reports/
+jacoco/
+*.exec
+
+# --- Model weights (never commit — downloaded at runtime) ---
+models/
+*.task
+*.tflite
+*.gguf
+*.onnx
+!app/src/main/assets/embedding/.gitkeep
+
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+*.log
+
+# --- Python tooling (for benchmark scripts on the GTX 1660 dev box) ---
+__pycache__/
+*.pyc
+.venv/
+venv/
