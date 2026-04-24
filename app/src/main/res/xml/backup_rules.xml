@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 11 (API 30) and below. We disable legacy auto-backup outright —
+    Eidos holds personal data (memory, conversations, embeddings) that must
+    not be replicated to Google's cloud backup infrastructure. Privacy moat.
+-->
+<full-backup-content>
+    <exclude domain="root" />
+    <exclude domain="file" />
+    <exclude domain="database" />
+    <exclude domain="sharedpref" />
+    <exclude domain="external" />
+</full-backup-content>

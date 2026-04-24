@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    EgressGuard's declarative layer. The OkHttp interceptor (Kotlin-side)
+    tightens further by certificate-pinning and enforcing an allowlist only
+    during the model-download window.
+
+    Default policy: cleartext DENIED. Only HuggingFace + its CDN reachable.
+    After model download completes, EgressGuard.revoke() causes the OkHttp
+    interceptor to reject everything; this XML stays static.
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">huggingface.co</domain>
+        <domain includeSubdomains="true">cdn-lfs.huggingface.co</domain>
+        <domain includeSubdomains="true">cdn-lfs-us-1.hf.co</domain>
+        <domain includeSubdomains="true">cdn-lfs-eu-1.hf.co</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
+</network-security-config>

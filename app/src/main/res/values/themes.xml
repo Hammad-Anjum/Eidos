@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose owns the palette at runtime via Material3. This entry exists
+         so the manifest's android:theme attribute resolves before the Compose
+         tree mounts. -->
+    <style name="Theme.Eidos" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

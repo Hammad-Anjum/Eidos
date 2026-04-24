@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">Eidos</string>
+
+    <!-- Navigation / tabs -->
+    <string name="nav_home">Home</string>
+    <string name="nav_chat">Chat</string>
+    <string name="nav_memory">Memory</string>
+    <string name="nav_kb">Knowledge</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Settings -->
+    <string name="settings_diagnostics_label">Diagnostics</string>
+    <string name="settings_diagnostics_summary">Logs, metrics, benchmarks, feature flags</string>
+
+    <!-- Diagnostics -->
+    <string name="diagnostics_tab_logs">Logs</string>
+    <string name="diagnostics_tab_metrics">Metrics</string>
+    <string name="diagnostics_tab_benchmarks">Benchmarks</string>
+    <string name="diagnostics_tab_flags">Flags</string>
+    <string name="diagnostics_run_benchmarks">Run benchmarks</string>
+    <string name="diagnostics_empty_logs">No logs yet. App has not generated events in this session.</string>
+    <string name="diagnostics_empty_metrics">No metrics yet. Start a generation to populate this view.</string>
+
+    <!-- Placeholder copy for empty screens (A0 only) -->
+    <string name="placeholder_home">Home (Phase A6)</string>
+    <string name="placeholder_chat">Chat (Phase A2)</string>
+    <string name="placeholder_memory">Memory (Phase A3)</string>
+    <string name="placeholder_kb">Knowledge (Phase A1)</string>
+</resources>

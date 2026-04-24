@@ -17,8 +17,8 @@ Built for the **Google Gemma 4 for Good Hackathon**.
 | Phase | Status |
 |---|---|
 | Pre-work — clean slate + repo init | ✅ done |
-| A0 — Gradle scaffolding + observability foundation | 🚧 next |
-| A0.5 — OEM survival kit + policy foundation | ⏳ pending |
+| A0 — Gradle scaffolding + observability foundation | ✅ shipped (pending `./gradlew assembleDebug` green on the RDC) |
+| A0.5 — OEM survival kit + policy foundation | 🚧 next |
 | A1 — Persistence + embeddings | ⏳ pending |
 | A2 — LiteRT-LM inference bring-up (multimodal) | ⏳ pending |
 | A3 — Memory + RAG + tool loop | ⏳ pending |
