@@ -1,0 +1,234 @@
+EIDOS DEVELOPER LOG
+===================
+
+Append-only ledger of every meaningful action on the Eidos project.
+Format spec lives in CLAUDE.md "Logging discipline". One entry per
+ship, decision, bug, or invariant. Newest at the bottom.
+
+For architectural invariants: see CLAUDE.md.
+For current scope and phase plan: see masterplan.md.
+For known iOS-sandbox limits: see KNOWN_LIMITATIONS.md.
+For session-level transcripts: see conversations/.
+
+
+================================================================
+SECTION 1: SHIP HISTORY (v3 onward)
+================================================================
+
+[SHIP] 2026-04-26 ~12:00 — v3 IPA to first external tester
+Bundle 1.0.3 (3). First sideloaded build via AltStore.
+Fresh-download marker rotated to bundle-version-derived
+(`fresh.<short>.<build>`). E4B gated to E2B-only in Release.
+Tester: chat send produced blank bubble + immediate crash.
+
+[BUG] 2026-04-26 ~04:24 — v5 launches and crashes within 1s
+Bundle 1.0.5 (5). 11 .ips files, all identical signature:
+EXC_BREAKPOINT brk 1 at _dispatch_assert_queue_fail ->
+MainActor.assumeIsolated -> closure #1 in closure #1 in
+variable initialization expression of static
+DeviceProfile.formFactor.
+
+[FIX] 2026-04-26 14:43 — v6 fixes DeviceProfile MainActor trap
+Closes BUG v5. Root cause: `static let formFactor` lazy
+initializer called `MainActor.assumeIsolated` from off-main
+because static-let inits run on the first reader's queue,
+which was the Gemma cooperative pool thread, not Main.
+Change: backed `formFactor` with `nonisolated(unsafe) static var`
+defaulting to `.iPhone`. Added `@MainActor warmUp()` called
+from `EidosApp.init()` before any background actor reads it.
+Files: Eidos/Platform/DeviceProfile.swift, Eidos/App/EidosApp.swift.
+
+[BUG] 2026-04-26 14:43 — v6 chat send still crashes silently
+Briefing renders. Chat send: prepare.start -> prepare.done ->
+stream.start -> silence -> app relaunch ~1s later. No .ips,
+no JetsamEvent attributable to Eidos, no Swift error caught.
+
+[SHIP] 2026-04-26 15:23 — v7 minimal-prompt chat mode
+Bundle 1.0.7 (7). New `EidosFeatureFlags.minimalChatPromptEnabled`
+default ON for iPhone Release. Routes chat through
+RAGPipeline.chatLite which builds [system: 250 chars,
+user: text] and drops RAG / tools / ambient / history.
+Chat still crashed. Prompt size alone was not the issue.
+
+[SHIP] 2026-04-26 15:40 — v8 surfaces Diagnostics
+Bundle 1.0.8 (8). Removed flag gate on Diagnostics in Settings.
+Added SmokeTestPane that calls gemma.generate() directly with
+a 4-token prompt. Files: Eidos/UI/Settings/SettingsView.swift,
+Eidos/UI/Settings/DiagnosticsView.swift.
+
+[TEST] 2026-04-26 ~12:50 — v8 tester report
+Smoke test PASSED 3 times back-to-back. Chat still crashed
+identically on every send. JSONL log proved: every app session,
+the FIRST gemma call (briefing) succeeded; every subsequent
+call crashed silently mid-prefill. State-reuse bug in
+ModelContainer.
+
+[FIX] 2026-04-26 16:09 — v9 ships MLX cache discipline
+Closes BUG v6 chat crash. Root cause: mlx-swift-lm
+ModelContainer state reuse on iPhone Metal.
+Change: GemmaSession.clearMLXCache() (calls
+MLX.Memory.clearCache()) called between every generation.
+Pattern matches mlx-swift-lm BenchmarkHelpers.swift.
+Tester report: chat works "with some crashes" — first
+working chat path.
+
+[BUG] 2026-04-26 ~17:00 — v9 has UX gaps and edge crashes
+Speech permission crash (same MainActor.assumeIsolated class).
+"New conversation" tap crashes if streaming. Image upload error
+"Gemma4 image token count mismatch". Gemma fabricates tool
+execution ("Reminder set", "Alarm set", "Timer started").
+
+[REGRESSION] 2026-04-26 17:43 — v10 breaks chat completely
+Bundle 1.0.10 (10). Three independent regressions in one ship:
+(a) MLX.Memory.cacheLimit = 256 MB cap was too tight for chat
+    output sizes; second-call allocation failed.
+(b) AVAudioSession `.spokenAudio` mode is for playback, not
+    `.record`; iOS 26.3.1 returns paramErr (-50).
+(c) Inference lock added to generateText but NOT
+    generateMultimodal; image path still raced briefing.
+LESSON: stop bundling unrelated fixes. Ship one fix, validate,
+then ship the next.
+
+[FIX] 2026-04-26 18:10 — v11 partial undo + modularity refactor
+Closes BUG v10 (a) (b) (c).
+(a) Removed Memory.cacheLimit cap — back to MLX default.
+(b) AVAudioSession mode changed to `.measurement`. Matches
+    Apple's documented SFSpeechRecognizer pattern.
+(c) Extracted GemmaSession.runGuardedGeneration(...) and
+    wrapMLXStream(_:kind:). Both generateText and
+    generateMultimodal funnel through them. Lock + cache +
+    thermal + cleanup defined ONCE.
+chatLite returns Gemma stream directly (no wrapper Task).
+Smoke passed 4x; chat STILL crashed silently 3-4s after
+stream.start.
+
+[BUG] 2026-04-26 ~19:00 — v11 chat crash, no Swift error
+Same fingerprint: prepare.done -> stream.start -> silence ->
+relaunch. No tokens reached UI. Suspected MainActor starvation
+from per-token UI redraw during streaming, or Gemma chat-template
+choke on the 999-char markdown system prompt content.
+
+[FIX] 2026-04-27 07:27 — v12 defense-in-depth, 8 fixes
+Bundle 1.0.12 (12). Closes BUG v11 chat crash hypothesis space.
+Defenses applied at every layer:
+1. chatLite system prompt reverted to v9 ASCII-only (~250 chars).
+2. chatLite re-wraps gemma stream in a forwarding Task.
+3. ChatViewModel throttles UI updates to 60ms batches.
+4. DeviceProfile.availableMemoryMB pre-flight; throws
+   GemmaError.memoryConstrained(availableMB:) if < 800 MB.
+5. EidosApp.installCrashBreadcrumbs() wires
+   NSSetUncaughtExceptionHandler + signal handlers
+   (SIGABRT/SIGILL/SIGSEGV/SIGFPE/SIGBUS/SIGPIPE).
+   EidosLogger.flushSynchronously() drains before death.
+6. EidosApp.installMemoryPressureObserver() subscribes to
+   UIApplication.didReceiveMemoryWarningNotification,
+   calls MLX.Memory.clearCache() proactively.
+7. CancellationError caught separately at GemmaSession,
+   chatLite, ChatViewModel.send. Logged as `.cancelled`,
+   not `.error`.
+8. Errors fill assistant bubble with "(generation failed:
+   <reason>)". No more silent empty bubbles.
+Files: Eidos/RAG/RAGPipeline.swift, Eidos/UI/Chat/ChatViewModel.swift,
+Eidos/Platform/DeviceProfile.swift, Eidos/Inference/GemmaSession.swift,
+Eidos/App/EidosApp.swift, Eidos/Platform/Diagnostics/EidosLogger.swift,
+Eidos/Platform/Diagnostics/FailureCategory.swift.
+
+[BLOCKER] 2026-04-27 07:30 — v12 awaiting on-device test
+Tester unavailable. Status pending.
+
+
+================================================================
+SECTION 2: ARCHITECTURAL DECISIONS
+================================================================
+
+[DECISION] 2026-04-27 — Stay on MLX, keep Gemma 4 as primary model
+Owner: User. Rationale: Eidos's product scope (private second
+brain with full phone control) demands the strongest available
+multimodal model that fits the iPhone envelope; Gemma 4 E2B is
+the best fit despite mlx-swift-lm's gemma4 PRs being unmerged
+(Issues #389, PRs #180/#185/#187). Apple-native MLX runtime is
+better for Apple Silicon than LiteRT-LM despite LiteRT-LM having
+official Gemma 4 benchmarks. Net: accept community-fork risk on
+mlx-swift-lm gemma4 in exchange for the model + framework fit.
+
+[DECISION] 2026-04-26 — Disable RAG/tools/ambient on iPhone chat
+Owner: Engineering. Rationale: full RAGPipeline.chat builds
+10-15 K token prompts that destabilize Gemma 4 E2B on iPhone
+Metal. Minimal-prompt mode is the iPhone Release default until
+the safety-net cache discipline is proven stable across many
+chat turns.
+
+[RESEARCH] 2026-04-26 — Google AI Edge / LiteRT-LM evaluation
+Cross-checked Google's official Gemma 4 deployment path. Found:
+Google ships Gemma 4 E2B on iOS via LiteRT-LM with published
+iPhone 17 Pro benchmarks (56.5 t/s decode, 0.3s TTFT, 1.45 GB
+resident). Reference app: github.com/google-ai-edge/gallery.
+Apple Foundation Models (iOS 26): text-only, ~3B, no third-party
+models. Verdict: LiteRT-LM is the documented path for Gemma 4
+on iOS today; mlx-swift-lm is community-supported. See
+DECISION 2026-04-27 for which path we chose.
+
+
+================================================================
+SECTION 3: ARCHITECTURAL INVARIANTS
+================================================================
+
+[INVARIANT] DeviceProfile.warmUp() runs on MainActor before any
+background actor reads `formFactor`. Set in v6.
+
+[INVARIANT] MLX.Memory.clearCache() between every generation is
+mandatory on iPhone. Set in v9. Matches mlx-swift-lm
+BenchmarkHelpers practice. Do not delete.
+
+[INVARIANT] Every TCC permission callback / audio-engine
+callback / speech-recognition callback inside a `@MainActor`
+class must be `@Sendable`. Set in v6 + v10.
+
+[INVARIANT] AVAudioSession `.record` category pairs with
+`.measurement` mode. `.spokenAudio` is for playback only on
+iOS 26.3.1 and returns paramErr. Set in v11.
+
+[INVARIANT] ChatViewModel must throttle messages[i].content
+updates to ~60ms intervals during streaming. Set in v12.
+
+[INVARIANT] GemmaSession.generateText and generateMultimodal
+both funnel through runGuardedGeneration(...). Lock + cache
++ thermal + cleanup are defined ONCE. New inference paths added
+in the future must do the same. Set in v11.
+
+[INVARIANT] Pre-flight memory check before any prefill. If
+DeviceProfile.isMemoryConstrained, abort cleanly with
+GemmaError.memoryConstrained instead of letting jetsam
+reap the process. Set in v12.
+
+[INVARIANT] Diagnostics > Smoke test pane is the regression
+baseline. If Smoke fails, Gemma itself is broken. If Smoke
+passes but chat fails, the wrapper layer is broken. Set in v8.
+
+[INVARIANT] chatLite system prompt is ASCII-only, no markdown
+headers, no smart quotes, no em-dashes, no instruction-content
+strings like "Reminder set". Markdown content destabilizes
+Gemma 4 E2B chat-template tokenization on iPhone. Set in v12.
+
+
+================================================================
+SECTION 4: OPEN QUEUE
+================================================================
+
+[BLOCKER] v12 on-device test pending. Tester unavailable.
+
+[DEFERRED] Regression test suite for ChatViewModel + GemmaSession
++ RAGPipeline.chatLite. Gating on v12 result.
+
+[DEFERRED] Re-enable RAG / tools / ambient incrementally behind
+feature flags, measured with MemoryProbe. Gating on v12 result.
+
+[DEFERRED] mlx-swift-lm gemma4 upstream merge (PRs #180/#185/#187).
+External dependency.
+
+[DEFERRED] masterplan.md "Current State" table refresh. Phase 8
+needs status update from "85% complete" to "shipped + chat
+stability hardening complete v12".
+
+[DEFERRED] conversations/2026-04-26_chat_crash_marathon.md
+session record. Captures dead ends + actual root causes.
