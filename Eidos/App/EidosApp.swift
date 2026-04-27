@@ -7,6 +7,9 @@ struct EidosApp: App {
 
     @State private var container: AppContainer?
     @State private var initError: String?
+    /// Drives the FaceID / passcode lock. Owned at app level so it
+    /// survives container re-creates.
+    @State private var lock = AppLockController()
 
     init() {
         // Pre-resolve `DeviceProfile.formFactor` on the main thread BEFORE
@@ -33,6 +36,13 @@ struct EidosApp: App {
         // and we don't pile our cached buffers on top of an already
         // strained system. Cheap + entirely local.
         Self.installMemoryPressureObserver()
+
+        // Bootstrap the biometric lock state. If `appLockEnabled` is
+        // on AND the device supports auth, this sets `isLocked = true`
+        // so the lock view covers the UI from the very first frame.
+        let initialLock = AppLockController()
+        initialLock.bootstrapLockState()
+        _lock = State(initialValue: initialLock)
 
         do {
             _container = State(initialValue: try AppContainer())
@@ -106,6 +116,11 @@ struct EidosApp: App {
     }
 
     @State private var showFeatureTour = false
+    /// Tracks app foreground/background. We blur the UI when the app
+    /// resigns active so iOS's app-switcher snapshot doesn't capture
+    /// chat / memory content. Privacy-product table stakes.
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var isObscured: Bool = false
 
     var body: some Scene {
         WindowGroup {
@@ -122,6 +137,42 @@ struct EidosApp: App {
                         StartupModelStatusView()
                     }
                 }
+                // Privacy overlay: when scenePhase resigns active (going
+                // to background, app switcher, or split-view drag), the
+                // entire UI is covered so the snapshot iOS records for
+                // the app switcher cannot show sensitive memory / chat
+                // content. Restored when the app returns to .active.
+                .overlay {
+                    if isObscured {
+                        PrivacySnapshotOverlay()
+                            .transition(.opacity)
+                    }
+                }
+                .onChange(of: scenePhase) { oldPhase, newPhase in
+                    // .active is the only state where chat / memory is
+                    // actually being looked at by the user. .inactive
+                    // and .background both happen mid-snapshot, so we
+                    // hide content for both.
+                    isObscured = (newPhase != .active)
+                    // Foreground crossing: re-evaluate whether the lock
+                    // should re-engage (>5 min backgrounded).
+                    if oldPhase != .active && newPhase == .active {
+                        lock.handleForegroundTransition()
+                    }
+                    // Background crossing: hook for any future
+                    // background work AppLockController might want.
+                    if oldPhase == .active && newPhase != .active {
+                        lock.handleBackgroundTransition()
+                    }
+                }
+                .fullScreenCover(isPresented: Binding(
+                    get: { lock.isLocked },
+                    set: { _ in /* AppLockController owns this */ }
+                )) {
+                    AppLockView()
+                        .environment(lock)
+                }
+                .environment(lock)
                 .environment(container)
                 .modelContainer(container.modelContainer)
                 .task { await container.bootstrap() }

@@ -338,10 +338,29 @@ private struct LogEntryRow: View {
 
 private struct MetricsPane: View {
     @State private var entries: [EidosLogEntry] = []
+    @State private var decayReport: DecayReport?
 
     var body: some View {
         List {
-            Section {
+            Section("Memory decay") {
+                if let r = decayReport {
+                    LabeledContent("Last pass", value: r.ranAt.formatted(.relative(presentation: .named)))
+                        .font(.caption)
+                    LabeledContent("Demoted", value: "\(r.demoted.count)")
+                        .font(.caption.monospaced())
+                    LabeledContent("Archived", value: "\(r.archived.count)")
+                        .font(.caption.monospaced())
+                    LabeledContent("Evicted", value: "\(r.evicted.count)")
+                        .font(.caption.monospaced())
+                    LabeledContent("Skipped (pinned)", value: "\(r.skippedPinned.count)")
+                        .font(.caption.monospaced())
+                } else {
+                    Text("No decay pass has run yet on this device.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Section("Generation metrics") {
                 if entries.isEmpty {
                     Text("No generation metrics yet. Send a chat message and come back.")
                         .font(.callout)
@@ -356,6 +375,10 @@ private struct MetricsPane: View {
         }
         .onAppear {
             entries = EidosLogger.shared.recentEntries(limit: 200).filter { $0.level == .metric }
+            // ACTION-8 + NEXT-8: surface the latest persisted decay
+            // report so users can see what's been happening to their
+            // memories without watching the JSONL log directly.
+            decayReport = MemoryDecayEngine.loadLatestReport()
         }
     }
 }

@@ -24,10 +24,28 @@ actor MemoryCrystallizer {
 
     private let gemma: GemmaSession
     private let manager: MemoryManager
+    /// Optional. When set, every newly persisted memory is indexed
+    /// into the embedding-based recall service so the next chat
+    /// turn can find it semantically (not just by keyword). Wired
+    /// post-init by `AppContainer` since `MemoryRecallService`
+    /// depends on services that also depend on Gemma -> avoids a
+    /// retain cycle.
+    private(set) var recallService: MemoryRecallService?
 
-    init(gemma: GemmaSession, manager: MemoryManager) {
+    init(
+        gemma: GemmaSession,
+        manager: MemoryManager,
+        recallService: MemoryRecallService? = nil
+    ) {
         self.gemma = gemma
         self.manager = manager
+        self.recallService = recallService
+    }
+
+    /// Late-binds the recall service. Used by `AppContainer` to break
+    /// the dependency cycle.
+    func attachRecallService(_ service: MemoryRecallService) {
+        self.recallService = service
     }
 
     /// Extracts memorable facts from a conversation and persists them.
@@ -111,6 +129,47 @@ actor MemoryCrystallizer {
             "saved": saved.count,
             "decisions": decisions.count,
         ])
+
+        // Embedding-based recall: index every newly-persisted memory
+        // so the next chat turn can find it semantically (not just by
+        // keyword). Wrapped in a Task so we don't block the chat
+        // teardown path on embedding work — the recall service is
+        // crash-safe per its own try/catch.
+        if let recall = recallService, !saved.isEmpty {
+            let entries = saved
+            Task.detached {
+                for entry in entries {
+                    // Conflict surfacing: before indexing, check
+                    // whether this new fact looks semantically close
+                    // to an existing P1/P2 (core identity / active
+                    // priority) memory. If it is, log a conflict
+                    // candidate so a future UI can prompt the user
+                    // to reconcile ("Earlier you said X. This new
+                    // statement says Y. Which is right?"). Today we
+                    // only LOG; the actual reconciliation prompt is
+                    // a separate UX deliverable.
+                    let similar = await recall.similarHighPriority(
+                        to: entry.title + " " + entry.body,
+                        threshold: 0.55,
+                        maxResults: 3
+                    )
+                    if !similar.isEmpty {
+                        EidosLogger.shared.log(
+                            .info, category: .memory,
+                            event: "crystallizer.conflict-candidate",
+                            payload: [
+                                "new_entry_id": entry.id.uuidString,
+                                "new_title": entry.title,
+                                "similar_count": similar.count,
+                                "top_score": Double(similar[0].score),
+                                "top_existing_title": similar[0].entry.title,
+                            ]
+                        )
+                    }
+                    await recall.indexEntry(entry)
+                }
+            }
+        }
         return saved
     }
 

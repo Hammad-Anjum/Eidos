@@ -25,6 +25,11 @@ final class AppContainer {
     let ingestionCoordinator: IngestionCoordinator
     let modelDownloader: ModelDownloader
     let memoryManager: MemoryManager
+    /// Embedding-based semantic recall over the memory store. Built
+    /// in NEXT-1 (2026-04-27). Bridges EmbeddingService + VectorStore
+    /// + MemoryManager so chat turns can find memories by meaning,
+    /// not just keyword.
+    let memoryRecall: MemoryRecallService
     let memoryDecayEngine: MemoryDecayEngine
     let memoryCrystallizer: MemoryCrystallizer
     let appActionRegistry: AppActionRegistry
@@ -108,7 +113,23 @@ final class AppContainer {
         self.skillRegistry = skillRegistry
         self.memoryManager = memoryManager
         self.memoryDecayEngine = MemoryDecayEngine(manager: memoryManager)
-        self.memoryCrystallizer = MemoryCrystallizer(gemma: gemma, manager: memoryManager)
+        // Embedding-based memory recall. Wires the EmbeddingService +
+        // VectorStore + MemoryManager into a single semantic-recall
+        // API. After this is constructed, every newly-crystallized
+        // memory is auto-indexed (via attachRecallService below) and
+        // RAGPipeline.chatLite calls recall() to inject relevant
+        // facts into the chat prompt's <untrusted> block.
+        let memoryRecall = MemoryRecallService(
+            embedding: embeddingService,
+            vectorStore: vectorStore,
+            manager: memoryManager
+        )
+        self.memoryRecall = memoryRecall
+        self.memoryCrystallizer = MemoryCrystallizer(
+            gemma: gemma,
+            manager: memoryManager,
+            recallService: memoryRecall
+        )
         self.appActionRegistry = appActionRegistry
         let healthSource = HealthSource()
         self.healthSource = healthSource
@@ -126,7 +147,8 @@ final class AppContainer {
             gemma: gemma,
             knowledgeRepo: knowledgeRepo,
             memoryManager: memoryManager,
-            skillRegistry: skillRegistry
+            skillRegistry: skillRegistry,
+            memoryRecall: memoryRecall
         )
         self.digestGenerator = digestGenerator
         self.ingestionCoordinator = IngestionCoordinator(repo: knowledgeRepo)
@@ -188,6 +210,18 @@ final class AppContainer {
 
         await knowledgeRepo.loadVectorStoreFromDB()
         try? await memoryManager.rebuildIndex()
+
+        // Bootstrap the embedding-based memory recall index. Walks
+        // every tier and embeds entries that aren't already in the
+        // vector store. Deferred behind a Task.detached because:
+        // (1) it depends on EmbeddingService.load() being warm, which
+        //     happens lazily on first use,
+        // (2) we don't want to block app open on it — chats work
+        //     without recall, just less well, until the index lands.
+        Task.detached { [weak self] in
+            guard let self else { return }
+            await self.memoryRecall.rebuildIndex()
+        }
 
         // NLContextualEmbedding asset download fails in the iOS Simulator
         // (permission denied on `/var/db/com.apple.naturallanguaged`). On
@@ -255,6 +289,19 @@ final class AppContainer {
             locationSource.startMonitoring()
             EidosLogger.shared.log(.info, category: .app, event: "location.auto-start")
         }
+
+        // Register the background nudge task. iOS only — Mac Catalyst's
+        // BGTaskScheduler is a no-op silently. After register, the task
+        // is dormant; first scheduleNext() happens when the app
+        // backgrounds. We schedule one immediately so iOS has a queued
+        // request to consider on the very first background crossing.
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        NudgeBackgroundTask.register(
+            proactive: proactiveDigestGenerator,
+            notifications: notificationScheduler
+        )
+        NudgeBackgroundTask.scheduleNext()
+        #endif
 
         isBootstrapped = true
 

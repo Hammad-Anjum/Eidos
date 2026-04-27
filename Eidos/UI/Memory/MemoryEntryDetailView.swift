@@ -59,6 +59,11 @@ struct MemoryEntryDetailView: View {
                 Label(tierLabel(entry.tier), systemImage: "folder")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if entry.pinned {
+                    Label("Pinned", systemImage: "pin.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tint)
+                }
                 Spacer()
                 priorityPicker
             }
@@ -124,6 +129,12 @@ struct MemoryEntryDetailView: View {
                 Menu {
                     Button { beginEdit() } label: { Label("Edit", systemImage: "pencil") }
                     Button { Task { await touch() } } label: { Label("Mark as hot", systemImage: "flame") }
+                    Button { Task { await togglePinned() } } label: {
+                        Label(
+                            entry?.pinned == true ? "Unpin (allow decay)" : "Pin forever (skip decay)",
+                            systemImage: entry?.pinned == true ? "pin.slash" : "pin"
+                        )
+                    }
                     Button(role: .destructive) { confirmDelete = true } label: {
                         Label("Delete", systemImage: "trash")
                     }
@@ -180,6 +191,25 @@ struct MemoryEntryDetailView: View {
         try? await container.memoryManager.touch(id: recordID)
         await load()
         onChange()
+    }
+
+    /// Toggles the user-pinned flag. Pinned memories are exempt from
+    /// MemoryDecayEngine demotion / archival / eviction. Implements
+    /// the user-facing half of ACTION-8 (pinning data model already
+    /// landed in the 2026-04-27 sweep).
+    private func togglePinned() async {
+        guard var e = entry else { return }
+        e.pinned.toggle()
+        do {
+            _ = try await container.memoryManager.save(e)
+            await load()
+            onChange()
+        } catch {
+            // Save failed — surface in the editor next time. We
+            // intentionally don't show an alert here because pin/unpin
+            // is a low-stakes background action; the next load() will
+            // reflect the actual state.
+        }
     }
 
     private func performDelete() async {

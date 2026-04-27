@@ -11,6 +11,12 @@ struct CalendarSkill: Skill {
         self.source = source
     }
 
+    func availability() async -> SkillAvailability {
+        await source.hasEventsPermission
+            ? .available
+            : .permissionDenied(message: "Calendar access not granted. Settings > Privacy & Security > Calendars > Eidos.")
+    }
+
     func invoke(parameters: [String: AnyCodable]) async -> SkillResult {
         let daysAhead = parameters["days_ahead"]?.intValue ?? 7
         let events = await source.fetchEvents(daysAhead: daysAhead)

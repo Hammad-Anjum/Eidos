@@ -10,6 +10,9 @@ struct MemoryIndexRecord: Sendable, Equatable, Identifiable {
     var tags: [String]
     var updatedAt: Date
     var lastAccessedAt: Date
+    /// Carried in the index so `MemoryDecayEngine` can skip pinned
+    /// entries without round-tripping to disk per record.
+    var pinned: Bool
 
     init(from entry: MemoryEntry) {
         self.id = entry.id
@@ -19,6 +22,7 @@ struct MemoryIndexRecord: Sendable, Equatable, Identifiable {
         self.tags = entry.tags
         self.updatedAt = entry.updatedAt
         self.lastAccessedAt = entry.lastAccessedAt
+        self.pinned = entry.pinned
     }
 }
 

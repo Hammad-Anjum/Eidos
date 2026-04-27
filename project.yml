@@ -103,6 +103,16 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        # Background processing for the proactive nudge task. Without
+        # `processing` in `UIBackgroundModes`, BGTaskScheduler refuses
+        # to fire `com.hissamuddin.eidos.nudges.daily`. The identifier
+        # below is matched against `BGTaskSchedulerPermittedIdentifiers`
+        # at register-time — typo'ing either side breaks scheduling
+        # silently.
+        UIBackgroundModes:
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.hissamuddin.eidos.nudges.daily
         # NOTE: `UIRequiresFullScreen` was removed — iOS 26 deprecates
         # the key, and our app already works full-screen by nature of
         # the UIKit life cycle + `UILaunchScreen`.

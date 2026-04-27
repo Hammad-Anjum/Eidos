@@ -136,6 +136,164 @@ Eidos/Platform/Diagnostics/FailureCategory.swift.
 [BLOCKER] 2026-04-27 07:30 — v12 awaiting on-device test
 Tester unavailable. Status pending.
 
+[DEV] 2026-04-27 — Mass-implementation sweep, Phase 8.2 actions 1-10
+See work_log_2026-04-27.md for the full per-action breakdown.
+Summary of files touched (no v13 IPA yet):
+  - META-1: masterplan.md (Current State refresh).
+  - META-2: conversations/2026-04-26_chat_crash_marathon.md (new).
+  - ACTION-9: Eidos/UI/Components/PrivacySnapshotOverlay.swift (new),
+    Eidos/App/EidosApp.swift::body (scenePhase observer + .overlay).
+  - ACTION-8: Eidos/Memory/MemoryEntry.swift (pinned: Bool added),
+    Eidos/Memory/MemoryFrontmatter.swift (read/write pinned),
+    Eidos/Memory/MemoryIndex.swift (carries pinned in projection),
+    Eidos/Memory/MemoryDecayEngine.swift (skip pinned, persist
+    DecayReport JSON to AppSupport/eidos/memory/decay_latest.json).
+  - ACTION-1: Eidos/Skills/SkillProtocol.swift (Skill.availability()
+    + SkillAvailability enum), Eidos/Skills/SkillRegistry.swift
+    (availableSkills() async filter + dispatch-time defense),
+    Eidos/Skills/Builtin/CalendarSkill.swift,
+    .../RemindersSkill.swift, .../ContactsSkill.swift wired,
+    Eidos/RAG/RAGPipeline.swift (uses buildToolSchemasAvailable).
+  - ACTION-3: Eidos/Platform/AppLockController.swift (new,
+    @MainActor @Observable, FaceID/passcode + 5-min grace window),
+    Eidos/UI/Components/AppLockView.swift (new fullScreenCover),
+    Eidos/Platform/Diagnostics/EidosFeatureFlags.swift
+    (appLockEnabled flag, default ON in Release),
+    Eidos/App/EidosApp.swift::body (.fullScreenCover binding +
+    scenePhase->lock.handleForegroundTransition).
+  - ACTION-10: Eidos/Inference/SecureHTTPSSession.swift (new,
+    URLSessionDelegate with hostname allowlist + system-trust +
+    optional SPKI pin slot), Eidos/Inference/HuggingFaceDownloader.swift
+    (uses SecureHTTPSSession.session() instead of URLSession.shared).
+  - ACTION-6: Eidos/Inference/PromptTemplates.swift::chat() (moved
+    retrievedContext OUT of system message INTO user turn),
+    PromptTemplates.sanitizeUntrustedContext() (new) strips
+    role-spoofing tokens before injection.
+  - ACTION-2: Eidos/Memory/MemoryRecallService.swift (new actor
+    wiring EmbeddingService + VectorStore + MemoryManager),
+    Eidos/Memory/MemoryCrystallizer.swift (recallService late-bind
+    + auto-index newly-saved memories via Task.detached).
+  - ACTION-4: Eidos/Inference/InferenceSession.swift (new
+    protocol, GemmaSession conforms via empty extension).
+  - ACTION-5: Eidos/Digest/NudgeBackgroundTask.swift (new,
+    BGTaskScheduler iOS-only; reschedules itself + invokes
+    NotificationScheduler.scheduleNudge),
+    Eidos/Platform/NotificationScheduler.swift (added
+    scheduleNudge(identifier:title:body:)).
+  - TESTS: EidosTests/Phase8_2_RegressionTests.swift (new, 11
+    tests covering ACTION-1, 6, 8, 9, 10 surface).
+
+[DEFERRED] 2026-04-27 — Wiring still needed in AppContainer
+The new services are created but AppContainer doesn't yet
+construct/inject them. Specifically:
+  - MemoryRecallService needs to be added to AppContainer
+    (depends on EmbeddingService + VectorStore + MemoryManager,
+    all of which already exist), then
+    MemoryCrystallizer.attachRecallService(_:) called.
+  - NudgeBackgroundTask.register(...) needs to be called from
+    EidosApp.init() with the proactive + notifications services.
+  - Info.plist needs BGTaskSchedulerPermittedIdentifiers entry
+    `com.hissamuddin.eidos.nudges.daily` and Background Modes
+    capability (Background processing).
+These are intentionally NOT done in this sweep so the next pass
+can validate each wire-up independently. Each is a 5-minute job.
+
+[INVARIANT] 2026-04-27 — Skill availability gates the prompt
+Tools whose underlying permission is denied are NOT exposed in
+the tool catalogue Gemma sees. Filtering happens in
+RAGPipeline.buildToolSchemasAvailable(). Belt-and-braces
+re-check happens in SkillRegistry.dispatch.
+
+[INVARIANT] 2026-04-27 — Untrusted context lives in user turn
+The system message contains only authoritative instructions
+(identity, behavior rules, tool catalogue). Retrieved memory
+and KB content always lives inside the user turn wrapped in
+<untrusted> tags. PromptTemplates.sanitizeUntrustedContext()
+runs before injection to strip role-spoofing tokens.
+
+[INVARIANT] 2026-04-27 — TLS hostname allowlist
+SecureHTTPSSession.allowedHosts is the ONLY set of hostnames
+Eidos will TLS-handshake with. Adding a new domain requires
+adding it explicitly to the set. EgressGuard backstops at a
+higher level; the TLS allowlist is the second line.
+
+[RESEARCH] 2026-04-27 — Retrieval architecture survey
+Full report: research_retrieval_2026-04-27.md.
+Surveyed GraphRAG (Microsoft), LightRAG (HKUST), PageIndex
+(Vectify), long-context CAG, Karpathy's April 2026 LLM Wiki,
+embedding model alternatives (EmbeddingGemma 308M, bge-small,
+nomic-embed, gte-small, static-retrieval-mrl-en-v1), and
+entity-graph patterns. Findings drove the DECISIONs below.
+
+[DECISION] 2026-04-27 — Retrieval architecture: hybrid BM25+dense+RRF
+Owner: User + Engineering. Rationale: GraphRAG / LightRAG /
+PageIndex all infeasible at personal-scale on iPhone (LLM
+indexing cost dominates). Long-context dump fails past 16-32K
+tokens on iPhone 17 Pro Max. Hybrid retrieval (BM25 + dense
+embeddings + Reciprocal Rank Fusion k=60) is 2026 best practice
+for this exact use case, sub-millisecond on iOS, and SQLite
+FTS5 is built into the OS. See research_retrieval_2026-04-27.md
+section "Hybrid retrieval verdict".
+
+[DECISION] 2026-04-27 — Storage: keep markdown-first
+Owner: User + Engineering. Rationale: Karpathy's April 2026
+"LLM Wiki" pattern (raw/ + wiki/ + ingest/query/lint operation
+triad) directly validates Eidos's existing markdown-first design.
+Source-of-truth stays as `Memory/<tier>/<id>.md` files. Indexes
+(FTS5, vector store, entity_mentions) are derived artifacts
+rebuilt from .md on change. No proprietary database. No cloud.
+
+[DECISION] 2026-04-27 — Embedding model: NLContextualEmbedding default,
+                       EmbeddingGemma 308M opt-in pilot.
+Owner: Engineering. Rationale: NLContextualEmbedding is free,
+ANE-accelerated, zero install. Apple doesn't publish MTEB so
+quality vs alternatives is unmeasured. EmbeddingGemma 308M is
+MTEB #1 sub-500M with Matryoshka truncation (768->256 dim) and
+~300 MB disk; promising but unjustified without an in-house
+quality eval. Pilot behind a feature flag, side-by-side, before
+committing. Not blocking.
+
+[DECISION] 2026-04-27 — Entities: tags + lazy SQLite, no graph DB
+Owner: Engineering. Rationale: a real knowledge graph (nodes +
+edges) breaks even only at >10K entities AND multi-hop
+relational queries. Personal memory store has neither. Adopt
+the LightRAG entity layer WITHOUT the LLM-driven relationship
+extraction: YAML frontmatter tags as canonical, SQLite
+`entity_mentions` table as derived index, no edges-as-objects.
+
+[INVARIANT] 2026-04-27 — Storage layer ordering
+Markdown files in Memory/<tier>/<id>.md are SOURCE OF TRUTH.
+SwiftData rows, FTS5 tables, vector stores, entity indexes are
+all DERIVED ARTIFACTS rebuilt from the markdown on change. If
+markdown and any index disagree, markdown wins. Future code
+must respect this — don't write to derived indexes without
+mirroring to markdown first.
+
+[INVARIANT] 2026-04-27 — Retrieval cost cap on iPhone
+No retrieval path may execute more than 1 LLM forward pass per
+chat turn. This rules out GraphRAG / LightRAG / PageIndex's
+multi-pass query patterns and forces us toward
+embedding-then-fuse approaches. The single allowed pass is the
+chat reply itself (Gemma generating tokens for the user).
+
+[SHIP] 2026-04-27 — Initial push to GitHub (Hissam12/Eidos)
+Repository: https://github.com/Hissam12/Eidos
+Branch: main. Commit: 177f326. Files: 164. Size: 1.4 MB.
+Author: Hissam12 <Hissam12@users.noreply.github.com>
+(GitHub privacy-noreply pattern; no real email attached).
+Excludes via .gitignore: build/ (18 GB), Eidos.xcodeproj/
+(regenerated via xcodegen), *.ipa, *.dSYM, .DS_Store, model
+files. Includes: full source + project.yml + every doc file
+(developer_log.txt, architecture_audit_2026-04-27.md, masterplan.md,
+KNOWN_LIMITATIONS.md, history.md, README.md, CLAUDE.md, etc.).
+Pushed from a shared machine. macOS Keychain helper cached the
+first attempted PAT; local `credential.helper = ""` override was
+applied to force re-prompt. Two fine-grained PATs failed with 403
+"Write access not granted" despite Contents:R/W scoped to the repo
+(suspected propagation lag on a brand-new repo, or fine-grained
+permission resolution quirk). A classic PAT with `repo` scope
+worked on first try. PAT to be revoked manually post-push.
+
 
 ================================================================
 SECTION 2: ARCHITECTURAL DECISIONS

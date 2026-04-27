@@ -53,6 +53,11 @@ enum MemoryFrontmatter {
             ? "[]"
             : "[" + entry.tags.map { escapeInline($0) }.joined(separator: ", ") + "]"
 
+        // The `pinned` field is omitted when false to keep older
+        // unpinned files identical on re-render (no diff churn). It's
+        // explicitly written when true so users can hand-edit the
+        // .md if they need to.
+        let pinnedLine = entry.pinned ? "pinned: true\n" : ""
         return """
         ---
         id: \(entry.id.uuidString)
@@ -60,7 +65,7 @@ enum MemoryFrontmatter {
         tier: \(entry.tier.rawValue)
         priority: \(entry.priority.rawValue)
         tags: \(tagsRendered)
-        created_at: \(iso.string(from: entry.createdAt))
+        \(pinnedLine)created_at: \(iso.string(from: entry.createdAt))
         updated_at: \(iso.string(from: entry.updatedAt))
         last_accessed_at: \(iso.string(from: entry.lastAccessedAt))
         ---
@@ -131,6 +136,12 @@ enum MemoryFrontmatter {
         let createdAt = fields["created_at"].flatMap { iso.date(from: $0) } ?? Date()
         let updatedAt = fields["updated_at"].flatMap { iso.date(from: $0) } ?? createdAt
         let lastAccessedAt = fields["last_accessed_at"].flatMap { iso.date(from: $0) } ?? updatedAt
+        // Pinned defaults to false. Accept `true` / `yes` / `1` to be
+        // friendly to anyone hand-editing the YAML frontmatter.
+        let pinned: Bool = {
+            guard let raw = fields["pinned"]?.lowercased() else { return false }
+            return raw == "true" || raw == "yes" || raw == "1"
+        }()
 
         return MemoryEntry(
             id: uuid,
@@ -141,7 +152,8 @@ enum MemoryFrontmatter {
             tags: tags,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            lastAccessedAt: lastAccessedAt
+            lastAccessedAt: lastAccessedAt,
+            pinned: pinned
         )
     }
 

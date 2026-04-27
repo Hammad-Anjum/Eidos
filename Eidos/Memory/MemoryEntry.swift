@@ -45,6 +45,12 @@ struct MemoryEntry: Sendable, Identifiable, Equatable {
     var createdAt: Date
     var updatedAt: Date
     var lastAccessedAt: Date
+    /// User-pinned memories are exempt from `MemoryDecayEngine` priority
+    /// demotion and archival. The retention contract is: "I told Eidos
+    /// to keep this forever, and Eidos has to honor it." Decay still
+    /// updates `lastAccessedAt` on access, but never demotes priority
+    /// or moves the entry to the archive tier.
+    var pinned: Bool
 
     init(
         id: UUID = UUID(),
@@ -55,7 +61,8 @@ struct MemoryEntry: Sendable, Identifiable, Equatable {
         tags: [String] = [],
         createdAt: Date = Date(),
         updatedAt: Date? = nil,
-        lastAccessedAt: Date? = nil
+        lastAccessedAt: Date? = nil,
+        pinned: Bool = false
     ) {
         self.id = id
         self.tier = tier
@@ -66,5 +73,6 @@ struct MemoryEntry: Sendable, Identifiable, Equatable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
         self.lastAccessedAt = lastAccessedAt ?? createdAt
+        self.pinned = pinned
     }
 }

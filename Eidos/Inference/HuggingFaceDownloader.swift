@@ -16,9 +16,15 @@ enum HuggingFaceError: Error, LocalizedError {
     }
 }
 
-/// Downloads a HuggingFace model repository to a local directory using plain
-/// `URLSession`. Bypasses the `swift-huggingface` HubClient, which stalls on
-/// large LFS shards (reproduced on iOS Simulator and Mac Catalyst as of
+/// Downloads a HuggingFace model repository to a local directory using a
+/// hardened `URLSession` that:
+///   - rejects any TLS handshake whose host isn't on the HuggingFace
+///     allowlist (`SecureHTTPSSession.allowedHosts`)
+///   - validates the system trust chain
+///   - optionally pins the leaf cert's SPKI (off by default; populate
+///     `SecureHTTPSSession.pinnedSPKIHashes` to enable)
+/// Bypasses the `swift-huggingface` HubClient, which stalls on large
+/// LFS shards (reproduced on iOS Simulator and Mac Catalyst as of
 /// swift-huggingface 0.9.x).
 actor HuggingFaceDownloader {
 
@@ -26,6 +32,12 @@ actor HuggingFaceDownloader {
         let name: String
         let required: Bool
     }
+
+    /// Single hardened session used for all probe + download traffic.
+    /// Created lazily on first use so a misconfigured allowlist doesn't
+    /// fail at app boot. Same session is reused so connection-keep-
+    /// alive and HTTP/2 multiplexing work across files.
+    private lazy var session: URLSession = SecureHTTPSSession.session()
 
     /// Files published by `mlx-community/gemma-4-*` repos. Same set for E2B/E4B.
     static let gemma4Files: [File] = [
@@ -142,7 +154,7 @@ actor HuggingFaceDownloader {
         request.httpMethod = "GET"
         request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
 
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw HuggingFaceError.invalidResponse
         }
@@ -180,7 +192,7 @@ actor HuggingFaceDownloader {
         // method is unreliable on the iOS Simulator and certain HTTP/2
         // streamed responses, but `Progress` is always updated natively.
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let session = URLSession.shared
+            let session = session
             let task = session.downloadTask(with: url) { tempURL, response, error in
                 if let error {
                     cont.resume(throwing: error); return

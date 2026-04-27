@@ -281,3 +281,32 @@ tests are **193 / 193** passing.
 - [SHORTCUTS.md](SHORTCUTS.md) — App Intent catalogue for the Shortcuts app.
 - [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) — documented iOS-sandbox limits (not bugs).
 - [README.md](README.md) — Mac handoff instructions and project layout.
+
+---
+
+## 2026-04-26/27 — Chat-stability marathon and architectural consolidation
+
+A two-day push that compressed an entire Phase 8.1 into one external-tester loop. v3 through v12 shipped to AltStore over ~36 hours, each fixing a different undocumented landmine in the on-device Gemma 4 + iPhone 17 Pro Max stack: a `MainActor.assumeIsolated` trap in `DeviceProfile.formFactor` (v6), `MLX.Memory.clearCache()` discipline between every generation (v9), an `AVAudioSession` mode mismatch (v11), eight layered defenses against silent process kills (v12). Full record in `conversations/2026-04-26_chat_crash_marathon.md` with the dead-ends explicitly captured so future sessions don't repeat them.
+
+Pushed the codebase to GitHub (`Hissam12/Eidos`) for the first time during this period, from a shared dev machine; documented the safe-credential workflow and teardown checklist in the dev log.
+
+The 27th was a consolidation day: 5-domain architecture audit (`architecture_audit_2026-04-27.md`), Phase 8.2 mass-implementation sweep (10 ACTIONs landed: privacy snapshot overlay, biometric app lock, TLS hostname allowlist, structural prompt-injection defense, embedding-based memory recall service, `InferenceSession` protocol, background nudge scaffolding, regression tests), then a NEXT-1..10 wiring sweep that activated the dead code from Phase 8.2 and added curated tool calling, rolling token-budget history, memory pinning UI, conflict detection logging, decay-report visibility, onboarding privacy primer.
+
+---
+
+## 2026-04-27 — Retrieval architecture decided and SKG proposed
+
+Ran a focused research pass on every flavor of retrieval architecture being talked about in 2026: GraphRAG (Microsoft), LightRAG (HKUST), PageIndex (Vectify), long-context Cache-Augmented Generation, Karpathy's April 2026 "LLM Wiki", embedding-model alternatives. Verdicts in `research_retrieval_2026-04-27.md`:
+
+- All three KG-RAG variants (GraphRAG, LightRAG, PageIndex) infeasible on iPhone at single-user scale. LLM-pass indexing cost dominates. Skipped permanently.
+- Long-context dump (128K context) fails past 16-32K tokens on iPhone before TPS becomes unbearable. Skipped as a primary retrieval path; usable only as fallback.
+- Hybrid retrieval (BM25 via SQLite FTS5 + dense embeddings + Reciprocal Rank Fusion at k=60) is 2026 best practice for personal-scale on-device. Sub-millisecond. Built-into-iOS. Adopted as the retrieval backbone.
+- Karpathy's "LLM Wiki" pattern (raw / wiki / CLAUDE.md, three operations: ingest / query / lint) directly validates Eidos's existing markdown-first design. Adopted.
+- Embeddings: keep `NLContextualEmbedding` as default; pilot `EmbeddingGemma 308M` as opt-in upgrade behind a flag once we have a measured quality gap.
+- Entities: YAML frontmatter tags + lazy SQLite `entity_mentions` index. No first-class knowledge graph; break-even doesn't exist for personal scale.
+
+Same day, the user proposed and we validated a new memory architecture: **Self-Knowledge Graph (SKG)**. Zero-corpus cold start (no ingestion phase, ever — first-run UX is instant); user-centric topology (every node is an attribute or fact about the user, edges are mostly user→category→fact, dramatically simpler than a general-purpose KG); incremental classification at fact-write time using a 3-tier classifier (Apple `NLTagger` + keyword rules → `NLContextualEmbedding` cosine vs category centroids → Gemma fallback for uncertain cases, ~80% of facts hit the cheap path); decay-managed growth (existing `MemoryDecayEngine` operates on graph nodes, pruning the graph itself to bound size).
+
+The combination of (1) on-device, (2) zero-corpus cold start, (3) decay-managed, (4) user-centric topology is genuinely novel — no shipping product hits all four. SKG implementation queued as `SKG-1` through `SKG-9` (~24 hours of focused work). Will replace per-tier markdown layout (`Memory/<tier>/<id>.md`) with per-category layout (`Memory/categories/<category>.md`) plus an opportunistic `entity_mentions` SQLite index. Decay engine and recall service survive unchanged.
+
+Full SKG architectural argument and visual flowchart in `conversations/2026-04-27_phase82_and_skg.md`.

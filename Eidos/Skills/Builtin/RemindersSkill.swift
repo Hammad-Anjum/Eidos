@@ -11,6 +11,12 @@ struct RemindersSkill: Skill {
         self.source = source
     }
 
+    func availability() async -> SkillAvailability {
+        await source.hasRemindersPermission
+            ? .available
+            : .permissionDenied(message: "Reminders access not granted. Settings > Privacy & Security > Reminders > Eidos.")
+    }
+
     func invoke(parameters: [String: AnyCodable]) async -> SkillResult {
         let reminders = await source.fetchIncompleteReminders()
         if reminders.isEmpty {
@@ -37,6 +43,12 @@ struct CreateReminderSkill: Skill {
 
     init(source: CalendarSource) {
         self.source = source
+    }
+
+    func availability() async -> SkillAvailability {
+        await source.hasRemindersPermission
+            ? .available
+            : .permissionDenied(message: "Reminders access not granted. Settings > Privacy & Security > Reminders > Eidos.")
     }
 
     func invoke(parameters: [String: AnyCodable]) async -> SkillResult {

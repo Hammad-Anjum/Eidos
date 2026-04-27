@@ -30,6 +30,28 @@ final class EidosFeatureFlags {
         case safetyGateEnabled = "eidos.flag.safetyGate"
         case audioViaGemmaEnabled = "eidos.flag.audioViaGemma"
         case minimalChatPromptEnabled = "eidos.flag.minimalChatPrompt"
+        case appLockEnabled = "eidos.flag.appLock"
+        case curatedToolsInChatLite = "eidos.flag.curatedToolsInChatLite"
+    }
+
+    /// Allows `chatLite` to expose a curated 3-tool catalogue
+    /// (Reminders, Calendar, Contacts) to Gemma. When OFF, chatLite
+    /// is a stateless conversational mode with no tool access. When
+    /// ON, Gemma can emit JSON tool calls that get dispatched via
+    /// `SkillRegistry`. Defaults OFF so users opt in once they trust
+    /// stability — but the architecture is ready.
+    var curatedToolsInChatLite: Bool {
+        get { bool(.curatedToolsInChatLite, default: false) }
+        set { set(.curatedToolsInChatLite, newValue) }
+    }
+
+    /// Biometric / passcode gate at app launch and after >5 min
+    /// backgrounded. Defaults ON in Release because Eidos is a
+    /// privacy-first product. Users can toggle off in Settings ->
+    /// Diagnostics -> Flags if they prefer no lock.
+    var appLockEnabled: Bool {
+        get { bool(.appLockEnabled, default: true) }
+        set { set(.appLockEnabled, newValue) }
     }
 
     // MARK: - Flags
@@ -171,6 +193,8 @@ final class EidosFeatureFlags {
             .safetyGateEnabled,
             .audioViaGemmaEnabled,
             .minimalChatPromptEnabled,
+            .appLockEnabled,
+            .curatedToolsInChatLite,
         ] {
             UserDefaults.standard.removeObject(forKey: key.rawValue)
         }

@@ -1,6 +1,6 @@
 # Eidos — Master Plan (v3)
 
-**Last updated**: 2026-04-26
+**Last updated**: 2026-04-27
 **Vision**: The on-device multimodal AI that does what Siri can't — sees, hears, remembers everything, acts on your behalf, and never leaks your data.
 
 > **Source of truth.** Every design decision, feature request, and phase plan gets reconciled against this file. Code changes that introduce new architecture update this doc in the same commit. If CLAUDE.md and this file conflict, this file wins.
@@ -22,25 +22,42 @@ An on-device iOS AI personal assistant that:
 
 ---
 
-## Current State — 2026-04-26
+## Current State — 2026-04-27
 
 | Area | Status |
 |---|---|
-| Scaffolding (Phase 0) | ✅ complete |
-| Persistence + embeddings (Phase 1) | ✅ complete |
-| Inference bring-up (Phase 2) | ✅ complete — simulator uses mocked path, Mac (Designed for iPad) runs real Gemma 4 E2B |
-| Memory + RAG (Phase 3) | ✅ complete |
-| Skills + Home (Phase 4) | ✅ complete (14 skills wired), relationship intel and tone engine deferred |
-| App actions + ingestion (Phase 5) | ✅ complete, Share Ext implemented (pending App Group provisioning on real device) |
-| Proactive + HealthKit (Phase 6) | ✅ complete (6.1 RoutineLearner, 6.4 LifeLogEngine, 6.5 Tone Engine deferred) |
-| Polish + ship (Phase 7) | ✅ complete |
-| **Widgets + Live Activities + Control Widgets (iOS 18+)** | ✅ shipped |
-| **23 App Intents + 10 Siri phrases + Shortcuts recipes** | ✅ shipped |
-| **Ambient data sources (Location, Motion, Music, Focus)** | ✅ shipped |
-| **UILaunchScreen / full-screen layout fix** | ✅ shipped |
-| **Simulator mock path (Gemma + Speech + Download)** | ✅ shipped |
-| **Phase 8 — Multimodal + Observability** | ✅ complete — observability, safety, MLXVLM image path, benchmark fixtures, Markdown response rendering, model-load tester guardrails, startup model verification, force-fresh AltStore tester reset, and 193 green tests shipped; native raw-audio-to-Gemma explicitly blocked by current MLX API surface |
-| **Phase 9 — Skills / Personas** | ▶️ next — design locked, implementation after Phase 8 |
+| Scaffolding (Phase 0) | complete |
+| Persistence + embeddings (Phase 1) | complete |
+| Inference bring-up (Phase 2) | complete — simulator uses mocked path, Mac (Designed for iPad) runs real Gemma 4 E2B |
+| Memory + RAG (Phase 3) | complete |
+| Skills + Home (Phase 4) | complete (14 skills wired), relationship intel and tone engine deferred |
+| App actions + ingestion (Phase 5) | complete, Share Ext implemented |
+| Proactive + HealthKit (Phase 6) | complete (6.1 RoutineLearner, 6.4 LifeLogEngine, 6.5 Tone Engine deferred) |
+| Polish + ship (Phase 7) | complete |
+| Widgets + Live Activities + Control Widgets (iOS 18+) | shipped |
+| 23 App Intents + 10 Siri phrases + Shortcuts recipes | shipped |
+| Ambient data sources (Location, Motion, Music, Focus) | shipped |
+| UILaunchScreen / full-screen layout fix | shipped |
+| Simulator mock path (Gemma + Speech + Download) | shipped |
+| **Phase 8 — Multimodal + Observability** | shipped 2026-04-25; chat-stability hardening v3-v12 shipped 2026-04-26/27 |
+| **Phase 8.1 — Tester chat-crash hardening (v3-v12)** | shipped — see `developer_log.txt`. 8 layered defenses (memory pre-flight, FIFO inference lock, MLX cache discipline, throttled UI updates, ASCII-only chatLite prompt, sendable TCC callbacks, audio-session mode fix, NSUncaughtException + signal handlers). Chat path validated through Smoke pane locally; on-device validation pending |
+| **Phase 8.2 — Architecture audit + ACTION queue (2026-04-27)** | sweep landed — 10 ACTION items + 2 META items + 17 regression tests built clean against iOS Release. Awaiting on-device validation. See `architecture_audit_2026-04-27.md` and `work_log_2026-04-27.md`. |
+| **NEXT-1..10 wiring sweep (2026-04-27)** | sweep landed — Phase 8.2 dead code wired into runtime: AppContainer constructs `MemoryRecallService`, `chatLite` uses embedding recall + curated tools (flag) + rolling token-budget history, `NudgeBackgroundTask` registered, memory pinning UI shipped, decay-report visible in Diagnostics, onboarding privacy primer added. Build clean. |
+| **Phase 8.3 — Self-Knowledge Graph (SKG) implementation** | queued — architecture validated 2026-04-27. SKG-1..9 defined in `developer_log.txt`. Replaces earlier BRAIN-A/B/C proposal. ~24 hours focused work. Categories: PROFILE/WORK/HEALTH/RELATIONSHIPS/FOOD/ROUTINE/INTERESTS/FINANCE/GOALS/BELIEFS/OTHER. 3-tier classifier (NLTagger+keywords -> NLContextualEmbedding cosine -> Gemma fallback). Per-category MD as canonical artifact. Per-entity sections. Lazy SQLite `entity_mentions` index. |
+| **Phase 9 — Skills / Personas** | next — design locked, implementation after SKG lands and v12+ is on-device validated |
+
+### Active blockers
+- v12 IPA + Phase 8.2 + NEXT-1..10 awaiting on-device test (tester unavailable as of 2026-04-27 evening). v13 IPA needs xcodegen regen to absorb `UIBackgroundModes: [processing]` + `BGTaskSchedulerPermittedIdentifiers` from `project.yml`.
+- `mlx-swift-lm` upstream gemma4 PRs (#180, #185, #187) unmerged — we run a community fork by accepted decision (see DECISION 2026-04-27 in `developer_log.txt`).
+
+### Active engineering posture
+- Engine: MLX Swift, Gemma 4 E2B 4-bit. Locked by user 2026-04-27 (rationale: Apple-native runtime + best multimodal model for iPhone envelope, accepting community-fork risk).
+- Database: SwiftData (chat) + Markdown files (memory, source of truth) + in-memory `VectorStore`. NO cloud DB. Future: `sqlite-vec` for persistent vector index.
+- Language: Swift only. No C/C++/Python/Rust rewrite. Apple frameworks (MLX, NLContextualEmbedding, Accelerate, AVFoundation) already wrap C/C++/Metal under the hood.
+- Retrieval: hybrid BM25 (FTS5) + dense embeddings + RRF fusion is the 2026 best-practice path. Skip GraphRAG / LightRAG / PageIndex / 128K context dump.
+- Memory architecture: pivot to Self-Knowledge Graph (SKG). User-centric topology, classification-driven append, decay-managed growth. Distinct from GraphRAG / LightRAG / Karpathy's wiki by combining on-device + zero-corpus + decay + user-centric in one design.
+- Logging discipline: every meaningful action recorded in `developer_log.txt` per CLAUDE.md "Logging discipline" section.
+- Doc set being maintained: `developer_log.txt`, `work_log_2026-04-27.md`, `architecture_audit_2026-04-27.md`, `research_retrieval_2026-04-27.md`, `notes_mlxvlm_upgrade.md`, `KNOWN_LIMITATIONS.md`, `conversations/2026-04-26_chat_crash_marathon.md`, `conversations/2026-04-27_phase82_and_skg.md`.
 
 ---
 

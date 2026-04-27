@@ -11,6 +11,12 @@ struct ContactsSkill: Skill {
         self.source = source
     }
 
+    func availability() async -> SkillAvailability {
+        await source.hasPermission
+            ? .available
+            : .permissionDenied(message: "Contacts access not granted. Settings > Privacy & Security > Contacts > Eidos.")
+    }
+
     func invoke(parameters: [String: AnyCodable]) async -> SkillResult {
         guard let query = parameters["query"]?.stringValue, !query.isEmpty else {
             return .failure("Missing required parameter: query")

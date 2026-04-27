@@ -9,11 +9,75 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             switch step {
             case 0: welcomeStep
-            case 1: variantStep
+            case 1: privacyStep
+            case 2: variantStep
             default: downloadStep
             }
         }
         .animation(.default, value: step)
+    }
+
+    /// Onboarding step inserted between Welcome and Variant Select
+    /// (NEXT-9, 2026-04-27). Three concrete value-props + a privacy
+    /// commitment so the user understands WHY the upcoming download
+    /// is worth waiting for. Permission-priming work happens inline
+    /// when each platform feature is first used (not all at once
+    /// here — empirically that has higher grant rates than batch-
+    /// asking).
+    private var privacyStep: some View {
+        VStack(spacing: 22) {
+            Spacer()
+            Text("How Eidos is different")
+                .font(.title2.bold())
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+
+            VStack(alignment: .leading, spacing: 18) {
+                onboardingFeature(
+                    icon: "lock.shield.fill",
+                    title: "Nothing leaves your phone",
+                    body: "Inference, memory, voice — all run on-device. Eidos can't phone home even if it wanted to."
+                )
+                onboardingFeature(
+                    icon: "camera.fill",
+                    title: "Multimodal",
+                    body: "Photos, voice notes, calendar context. Gemma 4 understands all of it locally."
+                )
+                onboardingFeature(
+                    icon: "brain.head.profile",
+                    title: "Real memory, not session-shaped",
+                    body: "What you tell Eidos persists as Markdown files you can read, export, or delete any time."
+                )
+            }
+            .padding(.horizontal, 24)
+
+            Spacer()
+
+            VStack(spacing: 8) {
+                Button("Continue") { step = 2 }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                Text("Next: pick a model + start the one-time download.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding()
+    }
+
+    private func onboardingFeature(icon: String, title: String, body: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 28))
+                .foregroundStyle(.tint)
+                .frame(width: 36, alignment: .center)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                Text(body)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     // MARK: - Steps
@@ -105,7 +169,7 @@ struct OnboardingView: View {
             }
 
             Spacer()
-            Button("Download") { step = 2 }
+            Button("Download") { step = 3 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
         }
