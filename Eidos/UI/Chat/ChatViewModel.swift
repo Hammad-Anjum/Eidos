@@ -27,6 +27,24 @@ final class ChatViewModel {
     var isGenerating = false
     var errorMessage: String?
 
+    /// Surfaces an inline "warming up the vision model" notice the
+    /// first time the user sends an image-bearing chat on iPhone
+    /// during this app launch. The first multimodal generation pays
+    /// a 30-60 s Metal-kernel JIT-compile cost inside MLX's C++
+    /// runtime with zero Swift-visible activity — without this
+    /// notice, testers and demo users bail at 30 s thinking the app
+    /// has hung. Subsequent multimodal calls have cached kernels and
+    /// are fast, so the notice only fires once per launch. View clears
+    /// it when `isGenerating` flips false (and also enforces a 90 s
+    /// hard ceiling as a backstop via `.task(id:)`).
+    var warmupNoticeVisible = false
+
+    /// Latched once `warmupNoticeVisible` has fired this launch. Per-
+    /// app-launch lifetime by virtue of being a `ChatViewModel` instance
+    /// var — no UserDefaults, no persistence. The reset happens
+    /// implicitly when the VM is reconstructed on next cold start.
+    private var hasShownMultimodalWarmupNotice = false
+
     /// Latest detected reminder/todo intent from the user's text.
     /// Set in `send(...)` via `IntentExtractor.extract`; cleared when
     /// the user saves or dismisses, or when they send a new message
@@ -168,6 +186,19 @@ final class ChatViewModel {
         isGenerating = true
         errorMessage = nil
 
+        // First multimodal call of the session on iPhone — surface a
+        // patience notice so the user does not bail during MLX's
+        // vision-encoder JIT compile (30-60 s, silent inside C++).
+        // Mac / iPad / simulator don't hit the cliff, so they don't
+        // get the message. Only the *first* call shows it because
+        // subsequent calls reuse the cached kernels and are fast.
+        if image != nil
+            && DeviceProfile.formFactor == .iPhone
+            && !hasShownMultimodalWarmupNotice {
+            warmupNoticeVisible = true
+            hasShownMultimodalWarmupNotice = true
+        }
+
         // Intent extraction — fast, deterministic, no Gemma round-trip.
         // Runs on the user's text (not display text) so an autoSend
         // intent's hidden prompt doesn't surface a confusing chip.
@@ -266,6 +297,11 @@ final class ChatViewModel {
 
             streamingBuffer = ""
             isGenerating = false
+            // Drop the warmup notice on every terminal path (success,
+            // cancel, error). The view's `.task(id:)` backstop will
+            // also expire it on a 90 s ceiling if generation somehow
+            // never returns — but this is the normal clear path.
+            warmupNoticeVisible = false
             _ = userRow  // referenced for clarity
         }
     }

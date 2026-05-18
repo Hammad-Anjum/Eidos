@@ -14,6 +14,20 @@ import Tokenizers
 import UIKit
 #endif
 
+/// Reference-type holder shared between the inference task and its
+/// sibling heartbeat task in `wrapMLXStream`. `emittedAny` transitions
+/// false→true exactly once when MLX yields the first chunk. The
+/// transition is benign without synchronization: the heartbeat reads
+/// it to decide whether to stop and what to put in its payload —
+/// worst case one extra heartbeat fires with `first_token: false`
+/// after the transition. A reference type is required because a local
+/// `var Bool` captured by the heartbeat task would be a copy, not the
+/// inference task's live value. `@unchecked Sendable` is justified by
+/// the single-writer / monotonic-transition invariant.
+private final class HeartbeatState: @unchecked Sendable {
+    var emittedAny = false
+}
+
 enum GemmaError: Error, LocalizedError {
     case notLoaded
     case filesMissing(String)
@@ -476,8 +490,51 @@ actor GemmaSession {
         kind: String
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
+            // Shared state between inference task and the sibling
+            // heartbeat task spawned below. See HeartbeatState doc.
+            let state = HeartbeatState()
+            let startTime = Date()
+
+            // Sibling heartbeat task. Bridges the blind window between
+            // `stream.start` and `stream.first-token` — MLX's C++ Metal
+            // JIT compiler runs first-pass kernel compilation here with
+            // zero Swift-visible activity, which on iPhone can take
+            // 30-60s for the LLM and longer with the vision encoder.
+            // Without this log, we cannot distinguish "MLX still
+            // compiling" from "process OOM-killed by jetsam." The last
+            // heartbeat timestamp bounds time-of-death within 2 s.
+            //
+            // Detached + utility priority so the loop is off the
+            // cooperative thread the inference task may share with
+            // other actor work. Read-only — no lock, no MLX state.
+            // Auto-stops after first token OR 60 ticks (120 s) so
+            // long generations don't balloon the JSONL.
+            let heartbeatTask = Task.detached(priority: .utility) {
+                var ticks = 0
+                while !Task.isCancelled && !state.emittedAny && ticks < 60 {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if Task.isCancelled || state.emittedAny { break }
+                    ticks += 1
+                    let elapsedMs = Int(Date().timeIntervalSince(startTime) * 1000)
+                    EidosLogger.shared.log(.info, category: .model,
+                        event: "generate.\(kind).stream.heartbeat",
+                        payload: [
+                            "tick": ticks,
+                            "elapsed_ms": elapsedMs,
+                            "first_token": state.emittedAny,
+                            "available_mb": DeviceProfile.availableMemoryMB,
+                            "thermal": ProcessInfo.processInfo.thermalState.rawValue,
+                        ])
+                }
+            }
+
             let task = Task { [weak self] in
-                var emittedAny = false
+                // `defer` runs on every exit path — success, both
+                // catches, and the early `return` from the thermal /
+                // background abort branches — so heartbeat always
+                // stops. Without defer, the abort paths would leak
+                // the heartbeat task until its 120 s ceiling expires.
+                defer { heartbeatTask.cancel() }
                 var releasedLock = false
                 let release: @Sendable () async -> Void = { [weak self] in
                     guard let self else { return }
@@ -489,7 +546,7 @@ actor GemmaSession {
                 do {
                     for try await generation in stream {
                         if case .chunk(let text) = generation {
-                            if !emittedAny {
+                            if !state.emittedAny {
                                 EidosLogger.shared.log(.info, category: .model,
                                     event: "generate.\(kind).stream.first-token",
                                     payload: [
@@ -497,7 +554,11 @@ actor GemmaSession {
                                         "available_mb": DeviceProfile.availableMemoryMB,
                                     ])
                             }
-                            emittedAny = true
+                            // Flip BEFORE yield so the heartbeat's next
+                            // iteration observes the transition and
+                            // auto-stops, instead of logging one more
+                            // heartbeat with stale `first_token: false`.
+                            state.emittedAny = true
                             continuation.yield(text)
                         }
                         if ProcessInfo.processInfo.thermalState == .critical {
@@ -533,7 +594,7 @@ actor GemmaSession {
                     EidosLogger.shared.log(.info, category: .model,
                         event: "generate.\(kind).stream.done",
                         payload: [
-                            "emitted": emittedAny,
+                            "emitted": state.emittedAny,
                             "available_mb": DeviceProfile.availableMemoryMB,
                         ])
                     continuation.finish()
@@ -542,7 +603,7 @@ actor GemmaSession {
                     // Don't tag as error; just log and finish cleanly.
                     EidosLogger.shared.log(.info, category: .model,
                         event: "generate.\(kind).stream.cancelled",
-                        payload: ["emitted": emittedAny])
+                        payload: ["emitted": state.emittedAny])
                     continuation.finish()
                 } catch {
                     EidosLogger.shared.error(.model,
@@ -558,7 +619,12 @@ actor GemmaSession {
             continuation.onTermination = { _ in
                 // Cancellation — task body hits CancellationError, runs
                 // the catch path, then release(). We just need to make
-                // sure the iteration stops draining MLX.
+                // sure the iteration stops draining MLX. Also cancel
+                // the heartbeat directly here — the inference task's
+                // `defer` would eventually do it, but cancelling now
+                // shortens the window where heartbeats fire after the
+                // consumer has already torn down.
+                heartbeatTask.cancel()
                 task.cancel()
             }
         }

@@ -271,6 +271,12 @@ final class RAGPipeline {
         ("name five things you can see"), then a breath cue ("in for four, hold two, \
         out for six, twice"), then one small physical action ("stand up, walk to a \
         window"). End there, no follow-up question, do not call a tool.
+
+        If the user attaches a photo and signals visual overwhelm (phrases like \
+        "where to start", "too much", "messy", "don't know what to do", "looking at this"), \
+        call the break_down_scene tool. Pass a 2-3 sentence scene_description, \
+        ONE 5-minute first_action, and two short next_two_steps. Do not describe the photo \
+        in prose first - emit the JSON tool call directly.
         """
 
         // Rolling token-budget window. Carries as many recent turns as

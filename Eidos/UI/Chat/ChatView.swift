@@ -157,6 +157,9 @@ struct ChatView: View {
                         )
                         .id(msg.id)
                     }
+                    if vm.warmupNoticeVisible {
+                        warmupNoticeBubble(vm: vm)
+                    }
                     if let err = vm.errorMessage {
                         errorBubble(err)
                     }
@@ -413,5 +416,31 @@ struct ChatView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// One-shot "first photo is slow" notice. Mirrors `errorBubble`'s
+    /// shape so the visual treatment stays consistent, but uses the
+    /// accent color (informational) rather than orange (problem). The
+    /// VM clears `warmupNoticeVisible` on every terminal path of
+    /// generation; the `.task` here is a 90 s backstop in case the
+    /// generation never returns and the VM never clears it.
+    private func warmupNoticeBubble(vm: ChatViewModel) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "wand.and.stars")
+                .foregroundStyle(.tint)
+                .symbolEffect(.pulse, options: .repeating)
+            Text("Warming up the vision model — first photo can take 30-60 s on iPhone. Subsequent photos are fast.")
+                .font(.callout)
+                .foregroundStyle(.primary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+        .task {
+            try? await Task.sleep(nanoseconds: 90_000_000_000)
+            if !Task.isCancelled {
+                vm.warmupNoticeVisible = false
+            }
+        }
     }
 }
