@@ -132,16 +132,6 @@ crashes inside the simulator).
 **Demo-day note**: flip `minimalChatPromptEnabled` OFF in Settings →
 Diagnostics → Flags before recording. Tool calling depends on it.
 
-## Demo video
-
-*Linked at submission.* The 3-minute video shows: a cluttered desk →
-camera → Eidos narrates "start with the coffee mug" → switch to voice
-"I have fifteen things and my brain stopped" → "energy 0-4?" → 1 task
-→ voice-journal ramble about a hard conversation → 10 sec later
-recalled by name → voice "I just got criticized, I want to quit" →
-grounding script + breath → toggle Airplane Mode → repeat. Filmed on
-a real iPhone with a real AuDHD adult driving.
-
 ## License + acknowledgments
 
 - **Eidos source**: MIT (see `LICENSE`).
