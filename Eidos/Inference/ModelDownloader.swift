@@ -27,31 +27,209 @@ final class ModelDownloader {
     private let gemma: GemmaSession
     private let downloader = HuggingFaceDownloader()
 
+    private enum Keys {
+        static let modelDownloaded = "eidos.modelDownloaded"
+        static let selectedVariant = "eidos.variant"
+        static let testerFreshDownloadMarker = "eidos.testerFreshDownloadMarker"
+        /// Test/diagnostic override. When `true`, `isModelDownloaded`
+        /// returns `false` regardless of disk state or simulator gate,
+        /// routing the user back through `OnboardingView`. Cleared
+        /// automatically by `markModelReady()` once the user completes
+        /// the onboarding download step.
+        static let forceOnboarding = "EidosForceOnboarding"
+    }
+
+    /// Release-only tester reset. The marker now incorporates **the build
+    /// version + bundle version**, so every Release build automatically
+    /// bumps the marker without us having to remember to edit a string.
+    /// Any update over any prior install fires the fresh-download path.
+    ///
+    /// This closes the AltStore in-place-update bug where stale UserDefaults
+    /// preserved an old marker and skipped the reset on a new IPA install.
+    private static var currentTesterFreshDownloadMarker: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "0"
+        let build = info?["CFBundleVersion"] as? String ?? "0"
+        return "fresh.\(short).\(build)"
+    }
+
     init(gemma: GemmaSession) {
         self.gemma = gemma
     }
 
     var selectedVariant: GemmaVariant {
         get {
-            GemmaVariant(rawValue: UserDefaults.standard.string(forKey: "eidos.variant") ?? "")
+            let stored = GemmaVariant(rawValue: UserDefaults.standard.string(forKey: Keys.selectedVariant) ?? "")
                 ?? .defaultForDevice
+            return stored.isAvailableOnThisDevice ? stored : .defaultForDevice
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: "eidos.variant")
+            let safeVariant = newValue.isAvailableOnThisDevice ? newValue : .defaultForDevice
+            UserDefaults.standard.set(safeVariant.rawValue, forKey: Keys.selectedVariant)
         }
     }
 
     var isModelDownloaded: Bool {
+        // Force-onboarding override. Set via the launch arg
+        // `-EidosForceOnboarding YES` (NSArgumentDomain → UserDefaults),
+        // or via Settings → Diagnostics → "Re-run onboarding." Wins over
+        // every other gate including the simulator short-circuit so
+        // testers can step through the onboarding flow without flashing
+        // a physical device. Cleared automatically once the user reaches
+        // the model-download step (see `markModelReady`).
+        if UserDefaults.standard.bool(forKey: Keys.forceOnboarding) {
+            return false
+        }
         // Simulator has no real MLX — `GemmaSession.load()` is a mock that
         // just flips `isLoaded = true`. Downloading multi-GB weights into
         // a sim that can't use them is wasted bandwidth, so we short-
         // circuit the gate here and let the app go straight to RootView.
-        // On device this is a genuine check against UserDefaults.
+        // On device this verifies both the persisted flag and required
+        // files. A stale flag must never bypass onboarding into chat.
         #if targetEnvironment(simulator)
         return true
         #else
-        return UserDefaults.standard.bool(forKey: "eidos.modelDownloaded")
+        guard UserDefaults.standard.bool(forKey: Keys.modelDownloaded) else {
+            return false
+        }
+        guard Self.hasRequiredModelFiles(for: selectedVariant) else {
+            UserDefaults.standard.set(false, forKey: Keys.modelDownloaded)
+            return false
+        }
+        return true
         #endif
+    }
+
+    nonisolated static func hasRequiredModelFiles(for variant: GemmaVariant) -> Bool {
+        guard let directory = try? GemmaSession.modelDirectory(for: variant) else {
+            return false
+        }
+        return hasRequiredModelFiles(in: directory)
+    }
+
+    nonisolated static func hasRequiredModelFiles(in directory: URL) -> Bool {
+        missingRequiredModelFiles(in: directory).isEmpty
+    }
+
+    nonisolated static func missingRequiredModelFiles(in directory: URL) -> [String] {
+        let expectedSafetensorsBytes = expectedModelSafetensorsBytes(in: directory)
+        return HuggingFaceDownloader.gemma4Files
+            .filter(\.required)
+            .compactMap { file in
+                let url = directory.appendingPathComponent(file.name)
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                      !isDirectory.boolValue,
+                      let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                      let size = attrs[.size] as? NSNumber,
+                      size.int64Value > 0 else {
+                    return file.name
+                }
+                if file.name == "model.safetensors",
+                   let expectedSafetensorsBytes,
+                   size.int64Value < expectedSafetensorsBytes {
+                    return file.name
+                }
+                return nil
+            }
+    }
+
+    private nonisolated static func expectedModelSafetensorsBytes(in directory: URL) -> Int64? {
+        let indexURL = directory.appendingPathComponent("model.safetensors.index.json")
+        guard let data = try? Data(contentsOf: indexURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let metadata = object["metadata"] as? [String: Any],
+              let totalSize = metadata["total_size"] as? NSNumber else {
+            return nil
+        }
+        return totalSize.int64Value
+    }
+
+    func beginCachedModelLoad() {
+        error = nil
+        progress = 1
+        phase = .loading
+    }
+
+    func markModelReady() {
+        UserDefaults.standard.set(true, forKey: Keys.modelDownloaded)
+        // Clear the force-onboarding override once the user has actually
+        // landed on (or past) the download step. Without this, the next
+        // launch would loop back into onboarding even though the model
+        // is now ready.
+        UserDefaults.standard.set(false, forKey: Keys.forceOnboarding)
+        progress = 1
+        error = nil
+        phase = .ready
+    }
+
+    func clearDownloadedModelState(
+        message: String? = nil,
+        removeFiles: Bool = false,
+        variant: GemmaVariant? = nil
+    ) {
+        UserDefaults.standard.set(false, forKey: Keys.modelDownloaded)
+        progress = 0
+        error = message
+        if removeFiles {
+            removeModelFiles(variant: variant)
+        }
+        phase = message.map { .failed($0) } ?? .idle
+    }
+
+    /// Forces a clean model download for external Release tester IPAs.
+    ///
+    /// This protects against AltStore's update path preserving sandbox
+    /// state from a previous broken build. It is intentionally skipped in
+    /// DEBUG and simulator builds so development remains fast.
+    func resetExternalTesterModelStateIfNeeded() {
+        #if DEBUG
+        return
+        #else
+        #if targetEnvironment(simulator)
+        return
+        #else
+        let marker = Self.currentTesterFreshDownloadMarker
+        guard UserDefaults.standard.string(forKey: Keys.testerFreshDownloadMarker) != marker else {
+            return
+        }
+        clearDownloadedModelState(removeFiles: true)
+        UserDefaults.standard.set(marker, forKey: Keys.testerFreshDownloadMarker)
+        EidosLogger.shared.log(
+            .warn,
+            category: .download,
+            event: "tester.force-fresh-model-download",
+            payload: ["marker": marker]
+        )
+        #endif
+        #endif
+    }
+
+    private func removeModelFiles(variant: GemmaVariant?) {
+        let variants = variant.map { [$0] } ?? GemmaVariant.allCases
+        for variant in variants {
+            guard let directory = try? GemmaSession.modelDirectory(for: variant),
+                  FileManager.default.fileExists(atPath: directory.path) else {
+                continue
+            }
+            do {
+                try FileManager.default.removeItem(at: directory)
+                EidosLogger.shared.log(
+                    .info,
+                    category: .download,
+                    event: "model.files.removed",
+                    payload: ["variant": variant.rawValue]
+                )
+            } catch {
+                EidosLogger.shared.error(
+                    .download,
+                    event: "model.files.remove.failed",
+                    error: error,
+                    failure: .downloadDiskFull,
+                    extra: ["variant": variant.rawValue]
+                )
+            }
+        }
     }
 }
 
@@ -114,13 +292,15 @@ extension ModelDownloader {
             // This can take 10-30s for multi-GB weights; surface it so
             // users don't think the app is frozen.
             phase = .loading
+            let missing = Self.missingRequiredModelFiles(in: directory)
+            guard missing.isEmpty else {
+                throw HuggingFaceError.missingRequiredFile(missing.joined(separator: ", "))
+            }
             try await gemma.load(variant: variant, config: ModelConfig(variant: variant))
-            UserDefaults.standard.set(true, forKey: "eidos.modelDownloaded")
-            phase = .ready
+            markModelReady()
         } catch {
             let msg = UserFacingError.message(for: error)
-            self.error = msg
-            phase = .failed(msg)
+            clearDownloadedModelState(message: msg)
         }
     }
 }

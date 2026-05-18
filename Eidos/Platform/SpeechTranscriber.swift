@@ -54,16 +54,34 @@ final class SpeechTranscriber {
         #if targetEnvironment(simulator)
         return true
         #else
+        EidosLogger.shared.log(.info, category: .permission,
+            event: "speech.permission.request.start")
+
+        // CRITICAL: the TCC permission callbacks (`SFSpeechRecognizer`,
+        // `AVAudioApplication`) fire on `com.apple.root.default-qos`,
+        // NOT on MainActor. Without the explicit `@Sendable` on these
+        // closures, the Swift 6 runtime treats them as MainActor-isolated
+        // (inherited from this enclosing `@MainActor` method) and
+        // `swift_task_isCurrentExecutorWithFlagsImpl` traps when TCC
+        // invokes them off-main → EXC_BREAKPOINT. Same crash class as
+        // `DeviceProfile.formFactor` had before v6. The fix is to mark
+        // the inner closures `@Sendable` so they don't inherit isolation.
         let speech = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            SFSpeechRecognizer.requestAuthorization { status in
+            SFSpeechRecognizer.requestAuthorization { @Sendable status in
                 cont.resume(returning: status == .authorized)
             }
         }
-        let mic: Bool = await withCheckedContinuation { cont in
-            AVAudioApplication.requestRecordPermission { granted in
+        EidosLogger.shared.log(.info, category: .permission,
+            event: "speech.permission.speech-step", payload: ["granted": speech])
+
+        let mic: Bool = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            AVAudioApplication.requestRecordPermission { @Sendable granted in
                 cont.resume(returning: granted)
             }
         }
+        EidosLogger.shared.log(.info, category: .permission,
+            event: "speech.permission.mic-step", payload: ["granted": mic])
+
         return speech && mic
         #endif
     }
@@ -100,20 +118,41 @@ final class SpeechTranscriber {
         }
         return
         #else
+        EidosLogger.shared.log(.info, category: .chat, event: "speech.start.entry")
+
         guard let recognizer, recognizer.isAvailable else {
+            EidosLogger.shared.log(.warn, category: .chat,
+                event: "speech.start.recognizer-unavailable",
+                failure: .audioSessionFailed)
             throw SpeechTranscriberError.recognitionUnavailable
         }
 
         // Audio session setup (iOS-only API, noop on macOS Catalyst).
+        // We FIRST deactivate any stale session — a previous crashed
+        // session may have left `setActive(true)` lingering in CoreAudio,
+        // and re-activating without deactivation can deadlock or crash.
         #if canImport(AVFAudio) && !os(macOS)
         do {
             let session = AVAudioSession.sharedInstance()
-            // `.spokenAudio` mode plays nicer with speech recognition than
-            // `.measurement`, which strips processing and is meant for
-            // acoustic-analysis apps, not STT.
-            try session.setCategory(.record, mode: .spokenAudio, options: [.duckOthers])
+            // Best-effort deactivate first; ignore errors — common when
+            // there's nothing to deactivate, which is the expected case.
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            // `.measurement` mode is the correct mode for `.record`
+            // category. The previous code used `.spokenAudio`, which is
+            // intended for **playback** (audiobooks, podcasts) and
+            // returns `OSStatus -50` (paramErr) on iOS 26.3.1 when paired
+            // with `.record` — we saw 30+ consecutive failures in the
+            // tester logs. Apple's own SFSpeechRecognizer sample uses
+            // `.record` + `.measurement` + `.duckOthers`. Yes, the
+            // documentation says `.measurement` "strips processing" —
+            // that's exactly what on-device speech-to-text wants
+            // (no AGC, no echo cancellation, raw PCM into the recognizer).
+            try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
+            EidosLogger.shared.log(.info, category: .chat, event: "speech.start.audio-session.ok")
         } catch {
+            EidosLogger.shared.error(.chat, event: "speech.start.audio-session.fail",
+                error: error, failure: .audioSessionFailed)
             throw SpeechTranscriberError.audioSessionFailed(error)
         }
         #endif
@@ -126,38 +165,71 @@ final class SpeechTranscriber {
         }
         self.request = req
 
-        // Audio tap — guard against a zero-channel input format which can
-        // trip an assertion in CoreAudio on devices that report a weird
-        // route (e.g. audio being captured by another app).
+        // Audio tap — guard against a zero-channel input format AND
+        // against a sample-rate of zero. Both can trip an assertion in
+        // CoreAudio's installTap on devices that report a weird route
+        // (e.g. audio being captured by another app, mic permission
+        // mid-init, or post-crash sandbox state).
         let node = audioEngine.inputNode
         let format = node.outputFormat(forBus: 0)
-        guard format.channelCount > 0 else {
+        EidosLogger.shared.log(.info, category: .chat, event: "speech.start.node.format",
+            payload: ["channels": format.channelCount, "sample_rate": format.sampleRate])
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            EidosLogger.shared.log(.warn, category: .chat,
+                event: "speech.start.bad-format",
+                payload: ["channels": format.channelCount, "sample_rate": format.sampleRate],
+                failure: .audioSessionFailed)
             throw SpeechTranscriberError.recognitionUnavailable
         }
-        node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak req] buffer, _ in
+        // CoreAudio invokes the tap on its render thread — NOT MainActor.
+        // Mark `@Sendable` so the closure doesn't inherit this method's
+        // MainActor isolation and trap when CoreAudio calls it.
+        node.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable [weak req] buffer, _ in
             req?.append(buffer)
         }
 
         audioEngine.prepare()
-        do { try audioEngine.start() }
-        catch { throw SpeechTranscriberError.audioSessionFailed(error) }
+        do {
+            try audioEngine.start()
+            EidosLogger.shared.log(.info, category: .chat, event: "speech.start.engine.ok")
+        } catch {
+            EidosLogger.shared.error(.chat, event: "speech.start.engine.fail",
+                error: error, failure: .audioSessionFailed)
+            // Engine failed to start — clean up the tap so we don't leak
+            // a half-attached node.
+            node.removeTap(onBus: 0)
+            throw SpeechTranscriberError.audioSessionFailed(error)
+        }
 
         transcript = ""
         error = nil
         isRecording = true
 
-        // Recognition task.
-        self.task = recognizer.recognitionTask(with: req) { [weak self] result, err in
-            Task { @MainActor in
+        // Recognition task. Same `@Sendable` rule — the SFSpeechRecognizer
+        // callback fires off MainActor and the closure must not inherit
+        // MainActor isolation, otherwise we trap on `assumeIsolated`.
+        //
+        // We extract every value we care about into Sendable locals
+        // BEFORE hopping to the MainActor Task. `SFSpeechRecognitionResult`
+        // and `Error` aren't Sendable themselves, so handing them into
+        // a `@MainActor in` closure is a data race per Swift 6 strict
+        // concurrency.
+        self.task = recognizer.recognitionTask(with: req) { @Sendable [weak self] result, err in
+            let transcript: String? = result?.bestTranscription.formattedString
+            let isFinal: Bool = result?.isFinal ?? false
+            let errorMessage: String? = err.map {
+                SpeechTranscriberError.recognizerFailed($0).localizedDescription
+            }
+            Task { @MainActor [weak self] in
                 guard let self else { return }
-                if let result {
-                    self.transcript = result.bestTranscription.formattedString
+                if let transcript {
+                    self.transcript = transcript
                 }
-                if let err {
-                    self.error = SpeechTranscriberError.recognizerFailed(err).localizedDescription
+                if let errorMessage {
+                    self.error = errorMessage
                     self.stop()
                 }
-                if result?.isFinal == true {
+                if isFinal {
                     self.stop()
                 }
             }

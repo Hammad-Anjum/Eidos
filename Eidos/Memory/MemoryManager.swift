@@ -23,10 +23,63 @@ actor MemoryManager {
     /// is itself an actor and provides its own serialization.
     nonisolated let index: MemoryIndex
 
+    /// Post-save hook fired after every successful `save(_:reindex:)`
+    /// whose `reindex` flag is true (the default). `AppContainer`
+    /// attaches a hook that pushes the entry into
+    /// `MemoryRecallService.indexEntry(...)` so every memory write
+    /// becomes findable by semantic recall without each caller
+    /// having to remember to index manually.
+    ///
+    /// Stored as a closure (rather than a typed `MemoryRecallService?`
+    /// reference) because `MemoryRecallService` already depends on
+    /// `MemoryManager`; a typed reference here would create a
+    /// circular layering. The closure is opt-in: tests + early
+    /// callers (pre-bootstrap) get the no-hook path automatically.
+    private var onSave: (@Sendable (MemoryEntry) async -> Void)?
+
     /// Pass `rootOverride` in tests to use a throw-away directory.
     init(rootOverride: URL? = nil, index: MemoryIndex = MemoryIndex()) {
         self.rootOverride = rootOverride
         self.index = index
+    }
+
+    /// Attach a post-save hook. Called once at app bootstrap by
+    /// `AppContainer` after both `MemoryManager` and
+    /// `MemoryRecallService` are constructed. Re-attaching overwrites
+    /// any prior hook — there's only one current observer slot by
+    /// design (no broadcast).
+    func attachOnSave(_ hook: @escaping @Sendable (MemoryEntry) async -> Void) {
+        self.onSave = hook
+    }
+
+    /// Total bytes on disk under `Documents/memory/`. Recursive sum
+    /// across every tier directory. O(N entries) so cheap for the
+    /// audience scale (<1k memories); fine to call on a view refresh.
+    /// Returns 0 if the memory root hasn't been created yet (first
+    /// launch, never wrote anything).
+    func diskUsageBytes() -> Int64 {
+        let root: URL
+        do { root = try self.root() } catch { return 0 }
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            // Prefer allocated size (matches Finder's "size on disk");
+            // fall back to logical size if APFS clones / sparse files
+            // make allocated unavailable. Skip directories implicitly
+            // — they report 0 here.
+            let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileSizeKey])
+            if let allocated = values?.totalFileAllocatedSize {
+                total += Int64(allocated)
+            } else if let logical = values?.fileSize {
+                total += Int64(logical)
+            }
+        }
+        return total
     }
 
     // MARK: - Startup
@@ -78,14 +131,24 @@ actor MemoryManager {
 
     /// Writes `entry` to disk, overwriting any existing file at the same id.
     /// Updates `updatedAt` to now and syncs the index.
+    ///
+    /// `reindex` controls whether the post-save hook (typically the
+    /// `MemoryRecallService.indexEntry` re-embed) fires. Defaults to
+    /// true. Callers that mutate only `lastAccessedAt` (eg. `touch`)
+    /// pass `false` because the embedding source (title + body) is
+    /// unchanged — re-embedding would burn Neural Engine time for no
+    /// recall-quality gain.
     @discardableResult
-    func save(_ entry: MemoryEntry) async throws -> MemoryEntry {
+    func save(_ entry: MemoryEntry, reindex: Bool = true) async throws -> MemoryEntry {
         var toWrite = entry
         toWrite.updatedAt = Date()
         let url = try fileURL(for: toWrite)
         let contents = MemoryFrontmatter.render(toWrite)
         try contents.write(to: url, atomically: true, encoding: .utf8)
         await index.upsert(MemoryIndexRecord(from: toWrite))
+        if reindex, let hook = onSave {
+            await hook(toWrite)
+        }
         return toWrite
     }
 
@@ -141,7 +204,9 @@ actor MemoryManager {
             throw MemoryManagerError.notFound(id)
         }
         entry.lastAccessedAt = Date()
-        try await save(entry)
+        // Skip the re-embed hook: title + body are unchanged, only
+        // `lastAccessedAt` moved. Re-embedding would be wasted work.
+        try await save(entry, reindex: false)
     }
 
     /// Moves an entry to a different tier (e.g. decaying from `topic` to

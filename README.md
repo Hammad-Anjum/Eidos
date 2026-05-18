@@ -1,129 +1,156 @@
-# Eidos
+# Eidos — On-Device AuDHD Companion
 
-**The on-device AI that does what Siri can't** — remembers everything, acts on your behalf, and never leaks your data.
+> Submission to the **Kaggle Gemma 4 Good Hackathon** (deadline
+> 2026-05-18). Track: **Digital Equity** (with overlap into Health &
+> Sciences for the RSD / burnout safety angle).
+>
+> An iOS app for AuDHD adults — the autism + ADHD overlap — that
+> looks at your mess and tells you where to start, grounds you when
+> criticism stings, listens when you ramble, and never asks you to do
+> executive function to use it. **No byte ever leaves your phone.**
 
-Eidos is a native iOS personal assistant built around a strict on-device constraint: **after the one-time model download, zero bytes leave your phone**. No cloud inference, no telemetry, no analytics, no sync. The knowledge you feed it — notes, voice memos, calendar, contacts, imported messages, health signals — lives and stays on the device it was captured on.
+## The problem
 
-The agent is powered by **Gemma 4** running through **MLX Swift** on Apple Silicon, with retrieval over a **tiered memory system** that persists across sessions and decays like human memory. Thirteen built-in skills can read state (calendar, reminders, contacts, KB) and perform actions (WhatsApp, SMS, email, calls, navigation, rides) — every outbound action confirmed before dispatch.
+There are ~1.5M+ members on r/ADHD, ~2M+ across r/autism and
+r/AutismInWomen, and a fast-growing r/AuDHD community for adults
+discovering they're both. They drop apps fast: per RevenueCat and
+follow-up Wellnest research, **54% of ADHD users drop apps within
+weeks** — the apps demand the exact executive function the user
+lacks.
 
----
+The existing market fails the AuDHD adult specifically:
 
-## What defines this codebase
+- **Tiimo** ($54/yr, 2025 App Store App of the Year) is beautiful at
+  visual planning but **doesn't help when planning has already
+  failed**.
+- **Goblin Tools** is free and viral, but cloud-routed — your messy
+  task list goes to OpenAI.
+- **Inflow** ($95/yr) ships CBT modules and a coach feel; rejection-
+  sensitive users find structured planning content defeating.
+- **Saner.AI** ($8-20/mo) is cloud chat.
+- **Spoons** ($79/yr) gets the design philosophy right (offline, no
+  gamification, autistic-built) but is a single-purpose energy
+  tracker — not a companion.
 
-- **Native iOS, not cross-platform.** Pure Swift 6 + SwiftUI + SwiftData. No React Native, no Flutter, no web views. Every framework is the Apple one that was built for the job.
-- **Strict concurrency, enforced.** Swift 6 strict concurrency is on for every target. `@Model` objects never cross actor boundaries — all background work hands off via `PersistentIdentifier` through `@ModelActor`.
-- **Privacy as a property, not a promise.** `EgressGuard` registers a `URLProtocol` subclass that blocks outbound traffic at the `URLSession` layer. The limitation is documented openly rather than hidden — see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
-- **Memory that behaves like memory.** Not a flat vector store. Markdown files on disk, tiered P1–P5 (core identity → active → topic → recent → archive), with automatic decay and end-of-session crystallization that consolidates transient context into longer-lived entries.
-- **Hybrid retrieval.** Vector search via Apple's built-in `NLContextualEmbedding` (Neural Engine, no bundled weights) merged with keyword search through Reciprocal Rank Fusion. Exact-match queries and semantic queries both work.
-- **Agentic with a safety rail.** The model can call tools natively, but every App Action (message, call, navigate, ride) routes through `ActionConfirmationSheet` before dispatch. Nothing sent silently.
-- **Honest about scope.** Features that aren't done are in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md), not hidden in docs. The product makes no claim it can't back up.
+Apple's Siri 2.0 partnered with Google Gemini in early 2026, so even
+the "system AI" voluntarily forfeited the pure-on-device privacy
+claim. **Data brokers actively sell ADHD / depression / autism
+diagnosis lists** ($2,500 for a depressed-individuals list with names
++ addresses per IDX research); insurance underwriters use them. The
+AuDHD adult walks in already knowing they don't want their burnout
+log shipped to OpenAI.
 
----
+## What it does
 
-## How Eidos thinks
+Four flows, all voice-first or camera-first, all on-device:
 
-```
-                     ┌───────────────────────────────┐
-                     │          ChatView             │
-                     └──────────────┬────────────────┘
-                                    │  user turn
-                        ┌───────────▼────────────┐
-                        │      RAGPipeline       │
-                        │  (single-pass, tool-   │
-                        │   calling native to    │
-                        │   Gemma 4)             │
-                        └───────────┬────────────┘
-                                    │
-          ┌─────────────┬───────────┼───────────┬──────────────┐
-          │             │           │           │              │
-   ┌──────▼──────┐ ┌────▼─────┐ ┌───▼───┐ ┌─────▼─────┐ ┌──────▼──────┐
-   │  Knowledge  │ │  Memory  │ │ Skill │ │  Gemma 4  │ │  Platform   │
-   │ Repository  │ │ Manager  │ │ Registry│ │ (MLX)    │ │  Sources    │
-   │  (SwiftData │ │ (Markdown│ │  (13   │ │ streaming │ │  (EventKit, │
-   │  + vectors) │ │  P1–P5)  │ │  tools)│ │  AsyncSeq │ │  HealthKit, │
-   │             │ │          │ │        │ │           │ │  CNContacts,│
-   │             │ │          │ │        │ │           │ │  Location,  │
-   │             │ │          │ │        │ │           │ │  Motion,    │
-   │             │ │          │ │        │ │           │ │  Music,     │
-   │             │ │          │ │        │ │           │ │  Focus)     │
-   └─────────────┘ └──────────┘ └────────┘ └───────────┘ └─────────────┘
-```
+| Flow | When you'd use it | What happens |
+|---|---|---|
+| **Look** | Looking at a cluttered desk / inbox / chore list | Tap camera. Photo. Gemma 4 vision narrates a spoken 3-step plan with a 5-minute commitment. |
+| **Ground** | Just got criticized; spiraling; can't think | Voice in. Eidos returns a scripted grounding response (5-4-3-2-1 sensory cue, breath cue, one physical action). It does NOT ask "do you want to talk about it." |
+| **Journal** | Need to get a hard conversation or feeling out of your head | Tap mic. Ramble. Stop. Eidos crystallizes the rambling into tagged memory entries you can find later. |
+| **What Now** | "I have fifteen things and my brain stopped." | Voice in. Eidos asks your energy (0-4). Picks ONE task from your calendar + memory. Returns a 5-minute commitment script. Not a list. One thing. |
 
-- **Retrieval** pulls from both the SwiftData-backed `KnowledgeRepository` (notes, imports, web clips) and the markdown-backed `MemoryManager` (tiered persistent memory). `KnowledgeAggregator` merges them.
-- **Context building** formats hits for the prompt with source-aware snippet windows and a hard character cap so retrieved text can't blow through the model's context.
-- **Inference** is one streaming pass through MLX's `ModelContainer` running Gemma 4 E2B. The model decides per-turn whether to emit a tool call via native function-calling tokens.
-- **Skill dispatch** parses the structured output, routes to the `SkillRegistry`, and for any action that touches the outside world (WhatsApp, SMS, email, calls, navigation, rides) surfaces an `ActionConfirmationSheet` before firing.
-- **Memory writes** happen in the background via `KnowledgeBackgroundActor` (for KB) and `MemoryCrystallizer` (for memory consolidation at end of session).
+Plus a system-prompt default tone shaped to AuDHD inertia: short
+replies, one option, slow pacing, never moralizing, never
+"shoulds." Spoons-style energy slider on Home; Settings toggle to
+flip to ADHD-only or autistic-only mode (adapts the prompt + UI).
 
----
+## Why Gemma 4
 
-## What Eidos can do
+This submission shows three of Gemma 4's distinctive features visibly:
 
-| Surface | Behavior |
+| Feature | Where in the flow |
 |---|---|
-| **Chat** | Gemma 4 E2B streaming responses, memory- and KB-aware context, conversation persistence across launches |
-| **Voice** | Mic button in chat bar. `SFSpeechRecognizer` with `requiresOnDeviceRecognition = true` |
-| **Memory** | Tiered MD-file store (P1–P5: core_identity, active, topic, recent, archive) with automatic priority decay and end-of-session crystallization. Full browser UI. Export to zip via Files app |
-| **Knowledge base** | SwiftData-backed entries with vector + keyword hybrid search (RRF, k = 60). Browse, edit, delete |
-| **Skills** | 13 built-in: calendar read/write, reminders read/create, contacts search, KB search/add, digest, WhatsApp, SMS, email, call, navigate, ride (every action behind a confirmation sheet) |
-| **Home** | Morning briefing combining calendar, reminders, memory highlights, and HealthKit insights. Daily notification at a configurable time |
-| **Widget** | Live Activity showing the daily briefing on the lock screen and Dynamic Island |
-| **Shortcuts** | Apple Intents integration — trigger Eidos from Siri, voice, or the Shortcuts app |
-| **Settings** | Model status, notification time, HealthKit permission, decay pass trigger, storage counts |
+| **Multimodal vision** | The "Look" flow — point the camera at your real mess, Gemma processes the image on-device. |
+| **Native function calling** | "Look" and "What Now" both emit structured tool calls. iOS sees a real action, not a chat reply. |
+| **Multilingual reasoning** | Apple's on-device speech in 50+ languages combines with Gemma's multilingual reasoning. Spanish "Look", Arabic "Ground" — same flow, same model, same device. |
 
----
+Variant: **Gemma 4 E2B** (4-bit, 1.5 GB) via MLX Swift. Vision through
+`MLXVLM`. Inference fully on-device.
 
-## Privacy architecture
+## Privacy posture
 
-Eidos has a hard **no-egress** stance. After the one-time model download:
+- **`EgressGuard`** — a `URLProtocol` subclass installed at app launch
+  blocks all outbound traffic except the one-time Gemma 4 model
+  download. After bootstrap, the network is dead in code, not just in
+  policy. Verified via `tcpdump` in the technical write-up.
+- **Biometric app lock** with privacy-snapshot overlay so iOS's
+  app-switcher cache cannot capture journal content.
+- **Markdown audit log** of every memory entry — exportable,
+  user-editable, never synced.
+- **No telemetry, no analytics, no third-party SDKs.**
+- **`SafetyGate`** intercepts actual crisis language pre-LLM with
+  hardcoded resources (988 in US, 911/112 emergency). Grounding flow
+  is for non-crisis RSD — SafetyGate doesn't fire here, Gemma's
+  scripted response handles it.
 
-- **`EgressGuard`** registers a `URLProtocol` that intercepts outbound requests and blocks anything not on the HuggingFace allowlist (and only during an explicit model download window).
-- **On-device speech recognition** (`requiresOnDeviceRecognition = true`) — audio and transcripts never hit a server.
-- **HealthKit** read access is optional; insights are stored, raw samples never are.
-- **Memory files** live in the app sandbox Documents directory, never synced, never uploaded.
-- **`.completeFileProtection`** on the SwiftData store and App Group queue — readable only when the device is unlocked.
+## What this app explicitly is not
 
-### Honest scope of `EgressGuard`
+- Not a therapist, not a coach, not a productivity app.
+- Not a diagnostic tool. Self-identification only.
+- Not gamified. No streaks, no badges, no virtual pet.
+- Not a planner. (Tiimo + Apple Reminders cover that.)
+- Not a "you should journal more" nag. It's there when you need it
+  and silent the rest of the time.
 
-`URLProtocol.registerClass` only affects sessions that respect URL protocols — which is `URLSession.shared` and `URLSession(configuration: .default)`. The HuggingFace Swift client uses its own `URLSession` configuration, so the guard doesn't block it during model download (the only traffic we want anyway). Our `HuggingFaceDownloader` uses `URLSession.shared`, so the guard applies to it. For production hardening we'd pin HTTPS certificates and audit every dependency's networking. See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for the full gap list.
-
----
-
-## Project layout
+## Repository layout
 
 ```
 Eidos/
-  App/                    # @main, container, tab router, feature tour
-    AppIntents/           # Apple Shortcuts / Siri integration
-  Inference/              # MLX Swift session, HF downloader, prompt templates
-  Embedding/              # NLContextualEmbedding wrapper, vector store
-  KnowledgeBase/          # SwiftData models, repository, background actor
-  RAG/                    # ContextBuilder, RAGPipeline
-  Memory/                 # Entry, Manager, Index, DecayEngine, Crystallizer,
-                          #   Aggregator, Exporter, Frontmatter
-  Skills/                 # Tool-calling protocol + 13 built-in skills
-  Platform/               # EventKit, Contacts, HealthKit, Speech, Location,
-                          #   Motion, Music, Focus, AppAction registry,
-                          #   NotificationScheduler, LiveActivityManager,
-                          #   EgressGuard
-  Ingestion/              # WhatsApp / mail / plain-text importers, coordinator
-  Digest/                 # DigestGenerator, ProactiveDigestGenerator
-  UI/                     # SwiftUI views & view models
-  Resources/              # Info.plist, entitlements
-EidosShared/              # Code shared between app and widget
-EidosWidget/              # Widget + Live Activity extension
-EidosShareExtension/      # Share Extension target (scaffold; real impl deferred)
-EidosTests/               # Unit + integration tests (120+)
+  App/                      # Bootstrap, DI, AppIntents
+  Inference/                # GemmaSession + MLX wrapper, prompt templates
+  Memory/                   # Markdown source-of-truth memory + decay + recall
+  KnowledgeBase/            # Substrate
+  Embedding/                # NLContextualEmbedding bridge
+  RAG/                      # ContextBuilder + RAGPipeline (tool-call loop)
+  Skills/                   # Tool-call substrate (AuADHD skills land next session)
+  Platform/                 # Camera + speech + audio capture; SafetyGate;
+                            # EgressGuard; AppLock; Diagnostics
+  UI/                       # Home (4 voice-first tiles), Chat, Memory, Settings
+  Resources/                # Info.plist, entitlements
+EidosShared/                # App-Group bridge for widget data
+EidosWidget/                # Control Widget entry points
+project.yml                 # xcodegen source
 ```
 
----
+## Build
 
-## Reference documents
+Requires macOS, Xcode 17+, iOS 26 SDK, and `xcodegen`.
 
-- [masterplan.md](masterplan.md) — active strategic roadmap, phase-by-phase status
-- [architecture.md](architecture.md) — canonical type/file/UI spec
-- [notes.md](notes.md) — research findings and design constraints
-- [research.md](research.md) — exploratory deep-dives (agent loop, vectorless RAG)
-- [history.md](history.md) — chronological project record
-- [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) — honest inventory of gaps and deferred work
-- [SHORTCUTS.md](SHORTCUTS.md) — user documentation for Apple Shortcuts / AppIntents
+```bash
+brew install xcodegen
+xcodegen generate
+open Eidos.xcodeproj
+```
+
+Run on iPhone 15 Pro or later for production multimodal performance.
+Mac (Designed for iPad) runs the full Gemma pipeline natively. The
+iOS Simulator falls back to canned inference responses (MLX Metal
+crashes inside the simulator).
+
+**Demo-day note**: flip `minimalChatPromptEnabled` OFF in Settings →
+Diagnostics → Flags before recording. Tool calling depends on it.
+
+## Demo video
+
+*Linked at submission.* The 3-minute video shows: a cluttered desk →
+camera → Eidos narrates "start with the coffee mug" → switch to voice
+"I have fifteen things and my brain stopped" → "energy 0-4?" → 1 task
+→ voice-journal ramble about a hard conversation → 10 sec later
+recalled by name → voice "I just got criticized, I want to quit" →
+grounding script + breath → toggle Airplane Mode → repeat. Filmed on
+a real iPhone with a real AuDHD adult driving.
+
+## License + acknowledgments
+
+- **Eidos source**: MIT (see `LICENSE`).
+- **MLX Swift**: Apache-2.0.
+- **Gemma 4 model weights**: governed by Google's
+  [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+- **No third-party content bundled**. The RSD / grounding script is
+  derived from public 5-4-3-2-1 and breath-pacing patterns used in
+  CBT / DBT — common knowledge, not licensed material.
+
+For the live product spec, see [`PRODUCT.md`](PRODUCT.md).
+For working rules in this repo, see [`CLAUDE.md`](CLAUDE.md).

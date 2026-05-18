@@ -1,49 +1,187 @@
 import SwiftUI
+import PhotosUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
+/// Chat composer with mic + camera + photo picker + text + send.
+///
+/// Layout (left → right):
+///   [📷 camera] [📁 photo] [🎙️ mic] [text field] [➤ send]
+///
+/// When the user attaches an image (camera or photo), we show a small
+/// thumbnail above the text field and keep it until send. The parent
+/// view model wires the image into `GemmaSession.generate(images:)`
+/// via the multimodal pipeline.
 struct ChatInputBar: View {
     @Binding var text: String
+    @Binding var attachedImage: CGImage?
+    @Binding var attachedAudio: Data?
     @FocusState.Binding var focused: Bool
     let isGenerating: Bool
     let onSend: () -> Void
 
     @State private var transcriber = SpeechTranscriber()
+    @State private var audioCapture = AudioCaptureService()
+
+    @State private var showCamera = false
+    @State private var photoSelection: [PhotosPickerItem] = []
+    @State private var visionService = VisionCaptureService()
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            micButton
+        VStack(spacing: 6) {
+            if let attached = attachedImage {
+                attachmentPreview(attached)
+            }
+            if let audio = attachedAudio {
+                audioAttachmentPreview(audio)
+            }
 
-            ZStack(alignment: .topLeading) {
-                if text.isEmpty && !transcriber.isRecording {
-                    Text("Message Eidos")
-                        .foregroundStyle(.tertiary)
+            HStack(alignment: .bottom, spacing: 6) {
+                cameraButton
+                photoPickerButton
+                micButton
+
+                ZStack(alignment: .topLeading) {
+                    if text.isEmpty && !isRecordingAudio {
+                        Text("Message Eidos")
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                    }
+                    TextField("", text: $text, axis: .vertical)
+                        .focused($focused)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 11)
+                        .frame(minHeight: 44)
+                        .lineLimit(1...6)
+                        .disabled(isGenerating || isRecordingAudio)
                 }
-                TextField("", text: $text, axis: .vertical)
-                    .focused($focused)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                    .frame(minHeight: 44)
-                    .lineLimit(1...6)
-                    .disabled(isGenerating || transcriber.isRecording)
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(Color(.secondarySystemBackground))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 22)
-                    .strokeBorder(focused ? Color.accentColor.opacity(0.3) : .clear, lineWidth: 1.5)
-            )
+                .background(
+                    RoundedRectangle(cornerRadius: 22)
+                        .fill(Color(.secondarySystemBackground))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22)
+                        .strokeBorder(focused ? Color.accentColor.opacity(0.3) : .clear, lineWidth: 1.5)
+                )
 
-            sendButton
+                sendButton
+            }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
         .onChange(of: transcriber.transcript) { _, newValue in
             if transcriber.isRecording { text = newValue }
         }
+        .sheet(isPresented: $showCamera) {
+            CameraCaptureView(
+                onCaptured: { cg in
+                    attachedImage = cg
+                    showCamera = false
+                    EidosLogger.shared.metric(.ui, event: "vision.camera.captured",
+                        values: ["w": cg.width, "h": cg.height])
+                },
+                onCancelled: { showCamera = false }
+            )
+        }
+        .onChange(of: photoSelection) { _, selection in
+            guard !selection.isEmpty else { return }
+            Task {
+                if let cg = try? await visionService.loadImage(from: selection) {
+                    attachedImage = cg
+                }
+                photoSelection = []
+            }
+        }
+    }
+
+    // MARK: - Attachment preview
+
+    @ViewBuilder
+    private func attachmentPreview(_ cg: CGImage) -> some View {
+        HStack {
+            #if canImport(UIKit)
+            Image(uiImage: UIImage(cgImage: cg))
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            #endif
+            Text("Attached image — Gemma will see it")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                attachedImage = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 6)
+    }
+
+    @ViewBuilder
+    private func audioAttachmentPreview(_ audio: Data) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "waveform")
+                .foregroundStyle(Color.accentColor.opacity(0.9))
+            Text("Attached voice note — \(audioDurationLabel(for: audio))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                attachedAudio = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 6)
+    }
+
+    // MARK: - Camera
+
+    // MARK: - Compose-bar tap-target rationale
+    //
+    // The Home tiles (Look / Ground / Journal / What Now) are the
+    // primary AuADHD eyes-closed surfaces and use 130pt tap targets.
+    // Inside the chat composer the user is already engaged with the
+    // app — vision and focus are present — so we use Apple HIG's 44pt
+    // accessibility minimum rather than the 88pt tile bar. The visual
+    // icon stays compact; `.contentShape(Rectangle())` widens the
+    // hit area to the full 44pt frame so tremor / shaky-finger users
+    // still land cleanly without ballooning the row height.
+
+    private var cameraButton: some View {
+        Button {
+            showCamera = true
+        } label: {
+            Image(systemName: "camera.fill")
+                .font(.system(size: 22))
+                .foregroundStyle(Color.accentColor.opacity(0.9))
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .disabled(isGenerating || !visionService.cameraAvailable)
+        .opacity(visionService.cameraAvailable ? 1 : 0.35)
+        .accessibilityLabel("Take photo")
+    }
+
+    // MARK: - Photo picker
+
+    private var photoPickerButton: some View {
+        PhotosPicker(selection: $photoSelection, maxSelectionCount: 1, matching: .images) {
+            Image(systemName: "photo.fill.on.rectangle.fill")
+                .font(.system(size: 22))
+                .foregroundStyle(Color.accentColor.opacity(0.9))
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .disabled(isGenerating)
+        .accessibilityLabel("Pick photo")
     }
 
     // MARK: - Mic
@@ -52,14 +190,15 @@ struct ChatInputBar: View {
         Button {
             Task { await toggleRecording() }
         } label: {
-            Image(systemName: transcriber.isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                .font(.system(size: 32))
-                .foregroundStyle(transcriber.isRecording ? Color.red : Color.accentColor.opacity(0.9))
-                .symbolEffect(.pulse, options: .repeating, isActive: transcriber.isRecording)
+            Image(systemName: isRecordingAudio ? "stop.circle.fill" : "mic.circle.fill")
+                .font(.system(size: 28))
+                .foregroundStyle(isRecordingAudio ? Color.red : Color.accentColor.opacity(0.9))
+                .symbolEffect(.pulse, options: .repeating, isActive: isRecordingAudio)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .disabled(isGenerating)
-        .frame(width: 44, height: 44)
-        .accessibilityLabel(transcriber.isRecording ? "Stop recording" : "Start voice input")
+        .accessibilityLabel(isRecordingAudio ? "Stop recording" : "Start voice input")
     }
 
     // MARK: - Send
@@ -82,16 +221,55 @@ struct ChatInputBar: View {
                     .font(.body.weight(.bold))
                     .foregroundStyle(.white)
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
         }
         .disabled(!canSend)
         .accessibilityLabel("Send")
     }
 
+    /// Can send when there's either text OR an attached image, and we're
+    /// not mid-generation / mid-recording.
     private var canSend: Bool {
-        !text.isEmpty && !isGenerating && !transcriber.isRecording
+        (!text.isEmpty || attachedImage != nil || attachedAudio != nil) && !isGenerating && !isRecordingAudio
     }
 
+    private var isRecordingAudio: Bool {
+        transcriber.isRecording || audioCapture.isRecording
+    }
+
+    // MARK: - Voice
+
+    @MainActor
     private func toggleRecording() async {
+        let useGemma = EidosFeatureFlags.shared.audioViaGemmaEnabled
+            && GemmaSession.supportsNativeAudioInput
+
+        // Defensive: if the flag was toggled in Settings while a
+        // recording was in flight on the OTHER path, the inactive
+        // service is still holding the mic / AVAudioSession. Stop it
+        // before dispatching, so the user doesn't end up with a
+        // ghost recorder running until the app is killed.
+        if useGemma, transcriber.isRecording {
+            transcriber.stop()
+            EidosLogger.shared.log(.warn, category: .chat,
+                event: "audio.toggle.stale-transcriber-stopped")
+        }
+        if !useGemma, audioCapture.isRecording {
+            _ = try? await audioCapture.stopAndReturnBuffer()
+            EidosLogger.shared.log(.warn, category: .chat,
+                event: "audio.toggle.stale-audioCapture-stopped")
+        }
+
+        if useGemma {
+            await toggleGemmaAudio()
+        } else {
+            await toggleTranscriber()
+        }
+    }
+
+    @MainActor
+    private func toggleTranscriber() async {
         if transcriber.isRecording {
             transcriber.stop()
             return
@@ -100,5 +278,34 @@ struct ChatInputBar: View {
         guard ok else { return }
         do { try transcriber.start() }
         catch { /* surfaced via transcriber.error */ }
+    }
+
+    @MainActor
+    private func toggleGemmaAudio() async {
+        if audioCapture.isRecording {
+            let buffer = (try? await audioCapture.stopAndReturnBuffer()) ?? Data()
+            if buffer.isEmpty {
+                EidosLogger.shared.log(.warn, category: .chat, event: "audio.empty")
+                return
+            }
+            attachedAudio = buffer
+            EidosLogger.shared.metric(.chat, event: "audio.ready", values: [
+                "bytes": buffer.count,
+            ])
+            return
+        }
+        do {
+            attachedAudio = nil
+            try await audioCapture.requestPermission()
+            try audioCapture.start()
+        } catch {
+            EidosLogger.shared.error(.chat, event: "audio.start.failed",
+                error: error, failure: .audioSessionFailed)
+        }
+    }
+
+    private func audioDurationLabel(for audio: Data) -> String {
+        let seconds = Double(audio.count) / (16_000 * 2)
+        return String(format: "%.1fs", seconds)
     }
 }

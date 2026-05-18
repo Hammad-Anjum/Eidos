@@ -55,29 +55,3 @@ final class ConversationMessage {
     }
 }
 
-@Model
-final class IngestionLog {
-    var id: UUID
-    var source: String
-    var filename: String?
-    var ingestedAt: Date
-    var entriesCreated: Int
-    var entriesSkippedAsDuplicate: Int   // B8: surfacing dedup in ingestion UI
-    var status: String  // "success" | "partial" | "failed"
-
-    init(
-        source: String,
-        filename: String? = nil,
-        entriesCreated: Int,
-        entriesSkippedAsDuplicate: Int = 0,
-        status: String
-    ) {
-        self.id = UUID()
-        self.source = source
-        self.filename = filename
-        self.ingestedAt = Date()
-        self.entriesCreated = entriesCreated
-        self.entriesSkippedAsDuplicate = entriesSkippedAsDuplicate
-        self.status = status
-    }
-}

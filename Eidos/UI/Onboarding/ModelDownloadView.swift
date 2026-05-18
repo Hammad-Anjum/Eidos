@@ -3,6 +3,12 @@ import SwiftUI
 struct ModelDownloadView: View {
     @Environment(AppContainer.self) private var container
     let variant: GemmaVariant
+    let forceDownload: Bool
+
+    init(variant: GemmaVariant, forceDownload: Bool = false) {
+        self.variant = variant
+        self.forceDownload = forceDownload
+    }
 
     var body: some View {
         let dl = container.modelDownloader
@@ -13,8 +19,13 @@ struct ModelDownloadView: View {
         }
         .padding()
         .task {
-            if case .idle = dl.phase, !dl.isModelDownloaded {
-                await dl.download(variant: variant)
+            if case .idle = dl.phase {
+                if forceDownload {
+                    dl.clearDownloadedModelState(removeFiles: true, variant: variant)
+                    await dl.download(variant: variant)
+                } else if !dl.isModelDownloaded {
+                    await dl.download(variant: variant)
+                }
             }
         }
     }
@@ -62,12 +73,41 @@ struct ModelDownloadView: View {
             }
 
         case .ready:
-            VStack(spacing: 12) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(.green)
+            VStack(spacing: 16) {
+                if #available(iOS 18.0, *) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 56))
+                        .foregroundStyle(.green)
+                    // `.symbolEffect(.bounce)` plays once by default on
+                    // iOS 17; the `options: .nonRepeating` variant added
+                    // a conformance that only lands in iOS 18, and would
+                    // break our iOS 17 deployment target.
+                        .symbolEffect(.bounce)
+                } else {
+                    // Fallback on earlier versions
+                }
                 Text("Ready")
                     .font(.title2.bold())
+                Text("Gemma 4 is loaded and running on your device. Everything from here is local.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+
+                // Explicit continue button. The app also auto-transitions via
+                // `EidosApp`'s gate (it observes `phase`), but users like an
+                // explicit hand-off — and in the rare case the auto-transition
+                // hasn't fired yet, this gives them a way out.
+                Button {
+                    container.modelDownloader.markModelReady()
+                } label: {
+                    Label("Start using Eidos", systemImage: "arrow.right.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.horizontal, 32)
+                .padding(.top, 8)
             }
 
         case .failed(let message):

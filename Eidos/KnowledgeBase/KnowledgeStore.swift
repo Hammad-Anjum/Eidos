@@ -11,6 +11,5 @@ enum KnowledgeStore {
         EmbeddingRecord.self,
         Conversation.self,
         ConversationMessage.self,
-        IngestionLog.self,
     ])
 }

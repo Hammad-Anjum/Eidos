@@ -14,6 +14,10 @@ struct SettingsView: View {
     @State private var notifStatus: NotificationAuthStatus = .notDetermined
     @State private var healthGranted = false
     @State private var memoryCount = 0
+    /// Sheet presentation for the on-device session report. Lives at
+    /// the Settings root so the preview-edit-share flow is one tap
+    /// from the user's normal "configure the app" mental model.
+    @State private var showSessionReport = false
 
     var body: some View {
         NavigationStack {
@@ -21,18 +25,90 @@ struct SettingsView: View {
                 modelSection
                 proactiveSection
                 privacySection
+                shareSection
                 storageSection
+                diagnosticsSection
                 aboutSection
             }
             .navigationTitle("Settings")
             .task { await loadState() }
+            .sheet(isPresented: $showSessionReport) {
+                SessionReportPreviewView()
+                    .environment(container)
+            }
+        }
+    }
+
+    // MARK: - Share entry
+
+    /// Opens `SessionReportPreviewView` — generates a tight
+    /// professional-readable briefing on-device, lets the user edit it,
+    /// then hands it to the iOS share sheet. Distinct from the Memory
+    /// tab's Weekly Summary, which is a longer verbatim export for the
+    /// user themselves. Section copy avoids "Doctor / Therapist /
+    /// Coach" wording per the `CLAUDE.md` tonal rule — recipient is
+    /// framed as "a professional" so the user picks the audience.
+    private var shareSection: some View {
+        Section {
+            Button {
+                showSessionReport = true
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Generate session report")
+                            .foregroundStyle(.primary)
+                        Text("A short on-device briefing of the past week — themes, commitments, notable entries — for a professional.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "doc.text.fill")
+                        .foregroundStyle(.teal)
+                }
+            }
+        } header: {
+            Text("Share")
+        } footer: {
+            Text("You'll see a preview and can edit before sharing. The report is built on your iPhone — nothing is uploaded.")
+                .font(.caption2)
+        }
+    }
+
+    // MARK: - Diagnostics entry
+
+    /// Always visible in v8+ — testers need it to share crash logs and
+    /// run the chat smoke test. Was previously gated behind a 5-tap
+    /// easter egg on the version number that turned out to not be wired
+    /// in Release. We'll re-hide it once the app stabilises.
+    private var diagnosticsSection: some View {
+        Section {
+            NavigationLink {
+                DiagnosticsView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Diagnostics")
+                        Text("Logs, smoke test, flags — share with developer if anything crashes")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "waveform.path.ecg.rectangle")
+                        .foregroundStyle(.blue)
+                }
+            }
+        } header: {
+            Text("Diagnostics")
+        } footer: {
+            Text("If chat crashes: open Diagnostics → Smoke test → Run, then Logs → Share JSONL.")
+                .font(.caption2)
         }
     }
 
     // MARK: - Sections
 
     private var modelSection: some View {
-        Section("Model") {
+        Section {
             let variant = container.modelDownloader.selectedVariant
             Label {
                 VStack(alignment: .leading, spacing: 2) {
@@ -47,6 +123,20 @@ struct SettingsView: View {
                       ? "checkmark.seal.fill" : "arrow.down.circle")
                     .foregroundStyle(container.modelDownloader.isModelDownloaded ? .green : .secondary)
             }
+
+            // Model switcher. Swapping variants unloads the current
+            // model, may kick a download (if the new variant was never
+            // fetched), and reloads.
+            NavigationLink {
+                ModelSwitcherView()
+            } label: {
+                Label("Switch model", systemImage: "arrow.2.squarepath")
+            }
+        } header: {
+            Text("Model")
+        } footer: {
+            Text("Smaller models are faster and use less memory. Larger models are slower but produce higher-quality answers.")
+                .font(.caption2)
         }
     }
 
