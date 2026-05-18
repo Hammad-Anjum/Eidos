@@ -93,14 +93,23 @@ TASK 8: Diagnostics — direct Gemma smoke test
                       coherent reply (not "Simulator mock").
 
 
-TASK 9: Flag check — minimal chat prompt must be OFF
-  What it does:       The minimal chat prompt skips the tool catalogue. With
-                      it ON, tool-calling surfaces (Look, What Now) silently
-                      degrade to plain chat.
-  Intended behavior:  Toggle is OFF on the demo build.
-  How to check:       Settings → Diagnostics → Flags. Confirm "Minimal chat
-                      prompt" toggle is OFF. THIS IS THE SINGLE HIGHEST-COST
-                      MISTAKE ON DEMO DAY — confirm before recording.
+TASK 9: Flag check — BOTH minimal chat prompt AND curated tools ON
+  What it does:       Two flags work together to keep chat on the safe
+                      minimal-prompt path WHILE still exposing tools so
+                      Look / What Now / Recall can fire. Both must be ON.
+                      Both default ON on iPhone Release as of the 2026-05-19
+                      structural fix; this task is verification, not config.
+  Intended behavior:  - "Minimal chat prompt"        toggle is ON.
+                      - "Curated tools in chatLite"  toggle is ON.
+  How to check:       Settings → Diagnostics → Flags. Confirm BOTH toggles ON.
+                      THE PRE-2026-05-19 INSTRUCTION SAID FLIP "MINIMAL CHAT
+                      PROMPT" OFF — that is now wrong and will crash the app
+                      on first send. Leave it ON. Both flags ON is the demo
+                      configuration; either OFF breaks the demo (different
+                      ways): "Minimal chat prompt" OFF -> chat OOM-jetsams
+                      on first send; "Curated tools in chatLite" OFF -> Look
+                      / What Now / Recall silently fall back to generic chat
+                      replies with no tool dispatch.
 
 
 --- PHASE C · THE FIVE FLAGSHIP SURFACES ---------------------------------

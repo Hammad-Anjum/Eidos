@@ -37,14 +37,28 @@ final class EidosFeatureFlags {
         case speakRepliesEnabled = "eidos.flag.speakReplies"
     }
 
-    /// Allows `chatLite` to expose a curated 3-tool catalogue
-    /// (Reminders, Calendar, Contacts) to Gemma. When OFF, chatLite
-    /// is a stateless conversational mode with no tool access. When
-    /// ON, Gemma can emit JSON tool calls that get dispatched via
-    /// `SkillRegistry`. Defaults OFF so users opt in once they trust
-    /// stability — but the architecture is ready.
+    /// Allows `chatLite` to expose a curated 3-tool catalogue to Gemma.
+    /// When OFF, chatLite is a stateless conversational mode with no
+    /// tool access. When ON, Gemma can emit JSON tool calls that get
+    /// dispatched via `SkillRegistry`.
+    ///
+    /// **Defaults ON in iPhone Release.** Without this flag, the only
+    /// way to make Look / What Now / Recall fire was to disable
+    /// `minimalChatPromptEnabled` — which puts chat back on the full
+    /// pipeline that OOM-jetsams iPhone (the v9-v12 chat-crash class
+    /// of bug). Pairing curated-tools-in-chatLite with the minimal
+    /// prompt path keeps prefill cheap AND gives the demo surfaces
+    /// the tool-call hook they need. DEBUG defaults OFF so dev builds
+    /// can exercise both paths.
     var curatedToolsInChatLite: Bool {
-        get { bool(.curatedToolsInChatLite, default: false) }
+        get {
+            #if DEBUG
+            let def = false
+            #else
+            let def: Bool = (DeviceProfile.formFactor == .iPhone)
+            #endif
+            return bool(.curatedToolsInChatLite, default: def)
+        }
         set { set(.curatedToolsInChatLite, newValue) }
     }
 

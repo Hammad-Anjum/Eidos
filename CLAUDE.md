@@ -115,7 +115,22 @@ targets with more headroom. Default conservatively on iPhone.
 - `AVAudioSession` `.record` pairs with `.measurement` mode.
 - ChatViewModel throttles streaming UI updates to ~60ms.
 - `chatLite` system prompt is ASCII-only — no markdown headers, smart
-  quotes, em-dashes, or instruction-content strings.
+  quotes, em-dashes, or instruction-content strings. **It is the only
+  inference path that has been verified safe on iPhone Release.** The
+  full `RAGPipeline.chat` path remains in the codebase for iPad / Mac
+  / DEBUG, but on iPhone Release `minimalChatPromptEnabled` stays ON
+  and `chatLite` carries every chat surface, including the AuADHD
+  demo flows. Do not add demo-critical behavior to the full pipeline
+  without first verifying that `chatLite` can carry it; if it has to
+  live in the full path, the demo-day flag rule has to change too
+  (and the OOM-jetsam class of bug has to be re-solved first).
+- `chatLite`'s curated tool catalogue is capped at 3 by
+  `SkillRegistry.availableSkills().prefix(3)`. The order of skill
+  construction in `AppContainer` is load-bearing: the 3 chat-path
+  tools (BreakDownScene, PickNextTask, RecallRelevantMemories) come
+  first; imperative-only tools (VoiceJournalCapture, BodyDouble —
+  dispatched directly from views) come after. Reordering this list
+  silently breaks demo surfaces.
 - `RAGPipeline.chat` runs a bounded tool loop, capped by
   `DeviceProfile.maxToolHops` (2 on iPhone, 4 on iPad, 5 on Mac).
   Thermal state is re-checked at every hop; `GemmaError.thermalCritical`
@@ -149,17 +164,31 @@ targets with more headroom. Default conservatively on iPhone.
 
 ## Demo-day operational rule (cofounder-facing)
 
-`EidosFeatureFlags.shared.minimalChatPromptEnabled` **defaults ON on
-iPhone Release** because the full chat prompt OOM-jetsams the process.
-**Tool calling is bypassed when this flag is ON.** Surfaces 1 (Break
-Down My Mess) and 5 (What Now) depend on tool calling.
+**TWO flags must both be ON for the demo. Both default ON on iPhone
+Release as of the 2026-05-19 structural fix; this section documents
+*verification*, not configuration.**
 
-For the demo build:
-1. Flip `minimalChatPromptEnabled` OFF in Settings → Diagnostics → Flags
-   on the demo device.
-2. Verify tool catalogue is present (run one test tool call first).
-3. **This is the single highest-cost mistake on demo day** — confirm it
-   before recording the take.
+| Flag | Default | Why |
+|---|---|---|
+| `minimalChatPromptEnabled` | ON | Full RAG prompt builds to 10-15 K tokens and OOM-jetsams iPhone on prefill. Was the entire v9-v12 chat-crash class of bug. |
+| `curatedToolsInChatLite` | ON | Exposes the top-3 chat-path tools (BreakDownScene, PickNextTask, RecallRelevantMemories) inside `chatLite` so Look / What Now / Recall fire without leaving the safe minimal-prompt path. |
+
+For the demo build, verify both ON in Settings → Diagnostics → Flags
+before recording. If either is OFF the demo breaks — `minimalChatPromptEnabled
+OFF` crashes the app on first send, `curatedToolsInChatLite OFF`
+silently degrades Look / What Now / Recall to generic chat replies.
+
+**Historical note**: the old operational rule (pre-2026-05-19) said
+"flip `minimalChatPromptEnabled` OFF for the demo so tool calling
+works." That was wrong — it traded silent-tool-degradation for
+guaranteed-OOM-crash. The structural fix moved curated tools and the
+AuADHD essentials (grounding script, short-reply default, no-moralizing
+rule) into the `chatLite` system prompt itself, so the safe path now
+carries the demo flows. The old workaround is obsolete; do not apply
+it. See `Eidos/RAG/RAGPipeline.swift::chatLite` for the expanded
+prompt, `Eidos/App/AppContainer.swift` for the skill ordering, and
+`Eidos/Platform/Diagnostics/EidosFeatureFlags.swift::curatedToolsInChatLite`
+for the new default.
 
 ---
 

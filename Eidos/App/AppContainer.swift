@@ -119,11 +119,22 @@ final class AppContainer {
         //     when the user taps the "Sit With Me" tile. Writes a
         //     session memory entry and returns the canonical opening
         //     line; the view owns the timer + halfway / closing cues.
+        // Order matters: `chatLite`'s curated-tools path exposes the top
+        // 3 from `SkillRegistry.availableSkills().prefix(3)` (the cap
+        // keeps prompt prefill cheap on iPhone). Chat-path tools come
+        // FIRST so they land in that cap; imperative-only tools
+        // (dispatched directly from views — JournalRecordingView /
+        // BodyDoublingView — and never selected by Gemma in chat) come
+        // after. Without this ordering, RecallRelevantMemoriesSkill was
+        // demoted out of the cap, breaking the hero ramble->recall flow
+        // whenever Gemma chose to emit a tool call for it.
         let skills: [any Skill] = [
+            // Chat-path tools (exposed in chatLite curated catalogue):
             BreakDownSceneSkill(memory: memoryManager),
             PickNextTaskSkill(memory: memoryManager, calendar: calendarSource),
-            VoiceJournalCaptureSkill(memory: memoryManager),
             RecallRelevantMemoriesSkill(recall: memoryRecall),
+            // Imperative-only (dispatched from views, never via Gemma):
+            VoiceJournalCaptureSkill(memory: memoryManager),
             BodyDoubleSkill(memory: memoryManager),
         ]
         let skillRegistry = SkillRegistry(skills: skills)

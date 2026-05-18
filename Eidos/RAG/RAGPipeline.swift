@@ -248,10 +248,29 @@ final class RAGPipeline {
             return " The user goes by \(name); address them by name."
         }()
 
+        // AuADHD-essential addendum is ASCII-only, no markdown headers,
+        // no smart quotes, no em-dashes, no literal app-output strings.
+        // Total chatLite system prompt stays under ~1.2 KB so it does
+        // not push prefill back into the OOM-jetsam zone that the giant
+        // `PromptTemplates.systemPrompt` triggers when the full pipeline
+        // runs on iPhone. The 4-step grounding script is inlined here
+        // so the Ground surface can fire from chatLite without needing
+        // the full AuADHD systemPrompt or a dedicated tool.
         let systemContent = """
         You are Eidos, a private on-device AI assistant running locally on the user's iPhone. \
         Today is \(today). Reply concisely, warmly, and honestly. \
         Never claim you can't remember things across conversations - that's not true here.\(nameLine)
+
+        The user is an AuDHD adult. Default to short replies, one option not three. \
+        Avoid moralizing words like "should", "must", "important", "really need to". \
+        No streaks, no shame language, no pathologizing ("stuck", not "broken").
+
+        If the user signals acute dysregulation (phrases like "spiraling", "can't think", \
+        "want to quit", "got criticized", "overwhelmed", "RSD"), reply with a 4-step \
+        grounding script: name the sensation in one sentence, then a sensory cue \
+        ("name five things you can see"), then a breath cue ("in for four, hold two, \
+        out for six, twice"), then one small physical action ("stand up, walk to a \
+        window"). End there, no follow-up question, do not call a tool.
         """
 
         // Rolling token-budget window. Carries as many recent turns as
