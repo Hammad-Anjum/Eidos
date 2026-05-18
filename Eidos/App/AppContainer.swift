@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import MLX
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -236,49 +237,36 @@ final class AppContainer {
             await memoryRecall.indexEntry(entry)
         }
 
-        // Bootstrap the embedding service before scheduling the index
-        // rebuild. The previous comment here claimed load() happens
-        // "lazily on first use" — it does not. `embed()` throws
-        // `.notLoaded` if the in-memory model isn't pre-loaded, so
-        // without an explicit load() the rebuild bails immediately
-        // (memory.recall.rebuild.skipped) and every runtime query
-        // fails (memory.recall.query-embed-failed). Semantic recall
-        // stays blind for the entire session.
+        // DEMO-MODE MEMORY CUT (2026-05-19): the embedding service
+        // load + index rebuild at bootstrap was pushing iPhone past
+        // the foreground-app RAM ceiling alongside Gemma's 3.58 GB
+        // weights — `app.memory-warning` fired twice during bootstrap,
+        // then Metal kernel JIT during first generation pushed it over
+        // and the process was SIGKILL'd before stream.first-token.
         //
-        // Order: hasAssets → ensureAssetsAvailable (network) → load
-        // (in-memory). ensureAssetsAvailable must run before
-        // EgressGuard.install() since it hits Apple's CDN; load() is
-        // network-free and just pulls the cached asset into memory.
-        // Both are bounded — NLContextualEmbedding is ~50 MB, loads
-        // in well under a second on A17+. We block bootstrap on
-        // load() (not on rebuildIndex) so the rebuild that follows
-        // is guaranteed to see isLoaded == true.
+        // The cut: skip `embeddingService.load()` and skip the eager
+        // `rebuildIndex()`. Semantic recall silently falls back to
+        // rule-based recall (P1 + activePriorities + topK hot topic
+        // by recency from ContextBuilder). Saves ~50 MB at bootstrap
+        // and removes the 8 indexing operations that allocated
+        // temporary buffers during the most memory-pressured window
+        // of app launch. Trade-off: "journal → immediate recall"
+        // hero demo flow becomes rule-based, not semantic — recall
+        // can still surface recent memories by recency / tier, just
+        // not by topical similarity.
+        //
+        // Asset download via `ensureAssetsAvailable()` is kept (cheap,
+        // doesn't load the model into memory; just downloads ~50 MB to
+        // disk for future launches). Must still run before
+        // `EgressGuard.install()` since it hits Apple's CDN.
         //
         // NLContextualEmbedding asset download fails in the iOS Simulator
-        // (permission denied on `/var/db/com.apple.naturallanguaged`). On
-        // device, Apple's CDN delivers the asset on first launch.
+        // (permission denied on `/var/db/com.apple.naturallanguaged`).
         #if !targetEnvironment(simulator)
         if await !embeddingService.hasAssets() {
             try? await embeddingService.ensureAssetsAvailable()
         }
-        do {
-            try await embeddingService.load()
-        } catch {
-            EidosLogger.shared.error(.memory, event: "embedding.load.failed",
-                error: error, failure: .ragEmbed)
-        }
         #endif
-
-        // Index rebuild walks every tier and embeds entries that
-        // aren't already in the vector store. Detached so it doesn't
-        // block app open — chats work without recall, just less well,
-        // until the index lands. Safe to schedule here because
-        // embeddingService.load() above has completed (or logged a
-        // failure that explains why recall will stay rule-based-only).
-        Task.detached { [weak self] in
-            guard let self else { return }
-            await self.memoryRecall.rebuildIndex()
-        }
 
         // External AltStore testers may update over a broken build, which
         // preserves UserDefaults and model folders. Clear that stale state
@@ -298,6 +286,17 @@ final class AppContainer {
                     config: ModelConfig(variant: selectedVariant)
                 )
                 modelDownloader.markModelReady()
+                // DEMO-MODE MEMORY CUT (2026-05-19): drop any
+                // transient Metal buffers MLX reserved during the
+                // model-load tensor unpack. Gemma 4 E2B's weight load
+                // leaves a non-trivial residual heap that piles on
+                // top of the 3.58 GB model weights, leaving the
+                // foreground app close to its iPhone RAM ceiling
+                // before chat even starts. clearCache here just
+                // releases the unpack scratch, not the weights.
+                #if !targetEnvironment(simulator)
+                MLX.Memory.clearCache()
+                #endif
             } catch {
                 let msg = UserFacingError.message(for: error)
                 modelDownloader.clearDownloadedModelState(message: msg)
