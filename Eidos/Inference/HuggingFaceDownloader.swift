@@ -4,19 +4,27 @@ enum HuggingFaceError: Error, LocalizedError {
     case httpError(Int, String)
     case missingRequiredFile(String)
     case invalidResponse
+    case invalidURL(String)
 
     var errorDescription: String? {
         switch self {
         case .httpError(let code, let path): "HTTP \(code) for \(path)"
         case .missingRequiredFile(let name): "Required file missing: \(name)"
         case .invalidResponse: "Invalid HTTP response"
+        case .invalidURL(let raw): "Invalid HuggingFace URL: \(raw)"
         }
     }
 }
 
-/// Downloads a HuggingFace model repository to a local directory using plain
-/// `URLSession`. Bypasses the `swift-huggingface` HubClient, which stalls on
-/// large LFS shards (reproduced on iOS Simulator and Mac Catalyst as of
+/// Downloads a HuggingFace model repository to a local directory using a
+/// hardened `URLSession` that:
+///   - rejects any TLS handshake whose host isn't on the HuggingFace
+///     allowlist (`SecureHTTPSSession.allowedHosts`)
+///   - validates the system trust chain
+///   - optionally pins the leaf cert's SPKI (off by default; populate
+///     `SecureHTTPSSession.pinnedSPKIHashes` to enable)
+/// Bypasses the `swift-huggingface` HubClient, which stalls on large
+/// LFS shards (reproduced on iOS Simulator and Mac Catalyst as of
 /// swift-huggingface 0.9.x).
 actor HuggingFaceDownloader {
 
@@ -24,6 +32,12 @@ actor HuggingFaceDownloader {
         let name: String
         let required: Bool
     }
+
+    /// Single hardened session used for all probe + download traffic.
+    /// Created lazily on first use so a misconfigured allowlist doesn't
+    /// fail at app boot. Same session is reused so connection-keep-
+    /// alive and HTTP/2 multiplexing work across files.
+    private lazy var session: URLSession = SecureHTTPSSession.session()
 
     /// Files published by `mlx-community/gemma-4-*` repos. Same set for E2B/E4B.
     static let gemma4Files: [File] = [
@@ -56,7 +70,7 @@ actor HuggingFaceDownloader {
         // URLSession; a Range GET is more reliable and still negligible traffic.
         var sizes: [String: Int64] = [:]
         for file in files {
-            let url = Self.resolveURL(repoID: repoID, path: file.name)
+            let url = try Self.resolveURL(repoID: repoID, path: file.name)
             let size = try await probeSize(url: url)
             #if DEBUG
             print("[HF] probe \(file.name): size=\(size)")
@@ -101,7 +115,7 @@ actor HuggingFaceDownloader {
             #endif
             let baseBefore = completed
             try await downloadOne(
-                url: Self.resolveURL(repoID: repoID, path: file.name),
+                url: try Self.resolveURL(repoID: repoID, path: file.name),
                 destination: destination,
                 onProgress: { fileFraction in
                     let current = baseBefore + Int64(Double(size) * fileFraction)
@@ -122,8 +136,12 @@ actor HuggingFaceDownloader {
 
     // MARK: - Internals
 
-    private static func resolveURL(repoID: String, path: String) -> URL {
-        URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(path)")!
+    private static func resolveURL(repoID: String, path: String) throws -> URL {
+        let raw = "https://huggingface.co/\(repoID)/resolve/main/\(path)"
+        guard let url = URL(string: raw) else {
+            throw HuggingFaceError.invalidURL(raw)
+        }
+        return url
     }
 
     /// Returns the total byte size of the resource at `url`, or `-1` if
@@ -136,7 +154,7 @@ actor HuggingFaceDownloader {
         request.httpMethod = "GET"
         request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
 
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw HuggingFaceError.invalidResponse
         }
@@ -174,7 +192,7 @@ actor HuggingFaceDownloader {
         // method is unreliable on the iOS Simulator and certain HTTP/2
         // streamed responses, but `Progress` is always updated natively.
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let session = URLSession.shared
+            let session = session
             let task = session.downloadTask(with: url) { tempURL, response, error in
                 if let error {
                     cont.resume(throwing: error); return
@@ -186,7 +204,9 @@ actor HuggingFaceDownloader {
                     cont.resume(throwing: HuggingFaceError.httpError(http.statusCode, url.path)); return
                 }
                 do {
-                    try? FileManager.default.removeItem(at: destination)
+                    if FileManager.default.fileExists(atPath: destination.path) {
+                        try FileManager.default.removeItem(at: destination)
+                    }
                     try FileManager.default.moveItem(at: tempURL, to: destination)
                     onProgress(1.0)  // final tick
                     cont.resume()

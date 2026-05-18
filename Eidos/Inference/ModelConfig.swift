@@ -2,7 +2,7 @@ import Foundation
 
 enum DeviceClass: Sendable {
     case standard  // 4-6 GB RAM (iPhone 13, 14, 15)
-    case pro       // 8+ GB RAM (iPhone 15 Pro, 16, 16 Pro)
+    case pro       // 8+ GB RAM (iPhone 15 Pro, 16 Pro, 17 Pro class)
 
     static var current: DeviceClass {
         ProcessInfo.processInfo.physicalMemory >= 7_500_000_000 ? .pro : .standard
@@ -50,15 +50,24 @@ enum GemmaVariant: String, CaseIterable, Sendable {
     }
 
     var isAvailableOnThisDevice: Bool {
-        switch (requiredDeviceClass, DeviceClass.current) {
+        // E4B needs a Pro-class device. We let Pro testers opt in
+        // (per user request 2026-04-26 to validate the smarter model on
+        // iPhone 17 Pro Max). Standard-RAM devices stay locked to E2B.
+        return switch (requiredDeviceClass, DeviceClass.current) {
         case (.standard, _): true
         case (.pro, .pro): true
         case (.pro, .standard): false
         }
     }
 
+    /// User-selectable variants in the picker. Same in Debug + Release —
+    /// availability is enforced per-device via `isAvailableOnThisDevice`.
+    static var selectableCases: [GemmaVariant] { allCases }
+
     static var defaultForDevice: GemmaVariant {
-        DeviceClass.current == .pro ? .e4b : .e2b
+        // First-run stability beats theoretical quality. E4B remains
+        // a DEBUG/dev option until E2B survives real-device validation.
+        .e2b
     }
 }
 

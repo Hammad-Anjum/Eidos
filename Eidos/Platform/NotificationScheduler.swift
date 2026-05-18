@@ -101,6 +101,35 @@ final class NotificationScheduler {
         #endif
     }
 
+    /// Schedules a one-shot nudge notification for stale active-priority
+    /// memories. Identifier is supplied by caller so we can dedupe
+    /// (e.g. don't queue the same nudge twice if the BG task fires
+    /// faster than the user taps it). Skips silently when notification
+    /// permission is denied — caller can re-request permission via
+    /// `requestPermission()` if it wants the user to be re-prompted.
+    func scheduleNudge(identifier: String, title: String, body: String) async {
+        #if canImport(UserNotifications)
+        let status = await authorizationStatus()
+        guard status == .authorized else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = Self.truncated(body, to: 300)
+        content.sound = .default
+        content.threadIdentifier = "eidos.nudge"
+        content.interruptionLevel = .active
+
+        // Fire immediately (`trigger: nil`). The whole point of a
+        // nudge is "right now you have a moment to think about this."
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: content,
+            trigger: nil
+        )
+        try? await UNUserNotificationCenter.current().add(request)
+        #endif
+    }
+
     /// Deliver the briefing notification immediately (debug / test).
     func deliverNow(title: String = "Eidos briefing", body: String) async {
         #if canImport(UserNotifications)

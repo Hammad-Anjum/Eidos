@@ -10,6 +10,9 @@ struct MemoryIndexRecord: Sendable, Equatable, Identifiable {
     var tags: [String]
     var updatedAt: Date
     var lastAccessedAt: Date
+    /// Carried in the index so `MemoryDecayEngine` can skip pinned
+    /// entries without round-tripping to disk per record.
+    var pinned: Bool
 
     init(from entry: MemoryEntry) {
         self.id = entry.id
@@ -19,6 +22,7 @@ struct MemoryIndexRecord: Sendable, Equatable, Identifiable {
         self.tags = entry.tags
         self.updatedAt = entry.updatedAt
         self.lastAccessedAt = entry.lastAccessedAt
+        self.pinned = entry.pinned
     }
 }
 
@@ -75,6 +79,20 @@ actor MemoryIndex {
         return Array(
             pool.sorted { $0.lastAccessedAt > $1.lastAccessedAt }.prefix(n)
         )
+    }
+
+    /// Simple case-insensitive substring search on title. Used by
+    /// `MemoryCrystallizer` to surface candidates for reconciliation.
+    /// Not a full semantic search — that's what the vector store is for.
+    ///
+    /// Returns results sorted by most recently updated, capped at 50.
+    func search(titleSubstring needle: String) -> [MemoryIndexRecord] {
+        let q = needle.lowercased()
+        guard !q.isEmpty else { return [] }
+        let matches = records.values
+            .filter { $0.title.lowercased().contains(q) }
+            .sorted { $0.updatedAt > $1.updatedAt }
+        return Array(matches.prefix(50))
     }
 
     /// Entries whose `lastAccessedAt` is older than `days` days ago.

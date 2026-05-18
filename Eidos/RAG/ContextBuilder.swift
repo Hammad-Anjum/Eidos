@@ -20,26 +20,98 @@ struct ContextBuilder {
         let kbHits: [KnowledgeRepository.SearchHit]
     }
 
-    // Character budgets. ~4 chars ≈ 1 token for English, so 12 000 chars ≈
-    // 3 000 tokens — comfortable for a 2B model with ~8 K context.
-    static let defaultMaxChars = 12_000
+    // Character budgets. ~4 chars ≈ 1 token for English.
+    //
+    // Gemma 4 ships a 128 K context window. We used to cap at 12 000
+    // chars (~3 K tokens) for the legacy 8 K-context path; now we can
+    // pack ~60 K chars (~15 K tokens) without overflowing, leaving
+    // generous room for the user turn + generation + chat template.
+    //
+    // Toggleable via `EidosFeatureFlags.longContextPackingEnabled` so
+    // we can regress quickly if benchmarks show attention spread hurts
+    // quality more than extra context helps.
+    static let conservativeMaxChars = 12_000
+    static let longContextMaxChars = 60_000
+
+    /// Resolves the budget for the current build call. Reads
+    /// `EidosFeatureFlags.shared` which is MainActor-isolated, so this
+    /// is not a default-argument expression — it's called explicitly
+    /// inside `build(...)` which is already on MainActor.
+    /// Device-aware budget. Reads `DeviceProfile` so iPhone gets a
+    /// tighter cap than iPad/Mac (TPS degrades with context on iPhone
+    /// specifically — benchmarks show >30 % throttle past ~10 K tokens
+    /// of context on A18/A19 under sustained load). Thermal state
+    /// halves the budget further.
+    @MainActor
+    static func resolvedMaxChars() -> Int {
+        DeviceProfile.contextBudgetChars(
+            longContextFlag: EidosFeatureFlags.shared.longContextPackingEnabled
+        )
+    }
+
     static let memoryShare = 0.6                    // memory gets up to 60% of budget
 
     let memoryManager: MemoryManager
     let knowledgeRepo: KnowledgeRepository
+    /// Optional semantic-recall pass. When present, `build(query:)` runs
+    /// an embedding search in parallel with the rule-based selection
+    /// and merges any high-confidence hits the rule-based pass would
+    /// have missed (e.g. fresh `.recentSession` journal entries that
+    /// match the query but don't live in P1 / activePriorities / hot
+    /// topic). Optional so the legacy memberwise init still works in
+    /// tests that don't wire recall.
+    let memoryRecall: MemoryRecallService?
+
+    /// Explicit init so `memoryRecall` defaults to nil for callers that
+    /// don't wire semantic recall (older tests, ChatLite fixtures). The
+    /// production path in `RAGPipeline.init` passes the live service.
+    init(
+        memoryManager: MemoryManager,
+        knowledgeRepo: KnowledgeRepository,
+        memoryRecall: MemoryRecallService? = nil
+    ) {
+        self.memoryManager = memoryManager
+        self.knowledgeRepo = knowledgeRepo
+        self.memoryRecall = memoryRecall
+    }
 
     // MARK: - Public
 
     /// Builds the context block for `query`. Also refreshes `lastAccessedAt`
     /// on every memory entry we included, so actively used memories resist
     /// decay.
-    func build(query: String, maxChars: Int = defaultMaxChars) async -> Result {
-        let memoryEntries = await gatherMemory()
-        let kbHits = (try? await knowledgeRepo.search(query: query, topK: 5)) ?? []
+    func build(query: String, maxChars: Int? = nil) async -> Result {
+        let effectiveMax = maxChars ?? Self.resolvedMaxChars()
+        let ruleBased = await gatherMemory()
 
-        let memoryBudget = Int(Double(maxChars) * Self.memoryShare)
+        // Semantic-recall pass — finds memories whose *content* matches
+        // the query, not just whose priority/tier would have selected
+        // them. Crucial for the hero demo flow: a freshly-saved journal
+        // entry lives in `.recentSession` (not P1, not activePriorities,
+        // not hot-topic), so the rule-based pass alone never surfaces
+        // it. Threshold 0.40 is tighter than chatLite's 0.30 — the
+        // rule-based set already covers the must-include cases, so the
+        // recall pass should add relevance, not noise.
+        let memoryEntries: [MemoryEntry] = await {
+            guard let recall = memoryRecall else { return ruleBased }
+            let hits = await recall.recall(query: query, topK: 10, minScore: 0.40)
+            guard !hits.isEmpty else { return ruleBased }
+            var seen: Set<UUID> = Set(ruleBased.map(\.id))
+            var merged = ruleBased
+            for hit in hits where !seen.contains(hit.entry.id) {
+                merged.append(hit.entry)
+                seen.insert(hit.entry.id)
+            }
+            return merged
+        }()
+        // KB topK scales with the packing flag — 5 for conservative,
+        // 10 when we have the context to absorb it.
+        let kbTopK = EidosFeatureFlags.shared.longContextPackingEnabled ? 10 : 5
+        let kbHits = (try? await knowledgeRepo.search(query: query, topK: kbTopK)) ?? []
+
+        let memoryBudget = Int(Double(effectiveMax) * Self.memoryShare)
         let memoryBlock = Self.renderMemory(memoryEntries, maxChars: memoryBudget)
-        let kbBudget = maxChars - memoryBlock.count
+        let kbBudget = effectiveMax - memoryBlock.count
         let kbBlock = Self.renderKB(kbHits, maxChars: kbBudget)
 
         var assembled = ""
@@ -59,16 +131,32 @@ struct ContextBuilder {
 
     // MARK: - Memory selection
 
-    /// Retrieval policy:
+    /// Retrieval policy (Phase 8.8 — long-context packing):
+    ///
+    /// When `longContextPackingEnabled` is on, we exploit Gemma 4's 128 K
+    /// window to pack more memory up front rather than filter aggressively.
+    /// Tiered by priority + recency:
     ///   • every P1 (core identity — always in context)
     ///   • every `active_priorities` entry
-    ///   • up to 10 hottest `topic` entries by `lastAccessedAt`
-    /// Capped at ~20 entries total to stay within budget.
+    ///   • up to 30 hottest `topic` entries by `lastAccessedAt` (was 10)
+    ///   • capped at 60 total (was 20)
+    ///
+    /// Rationale from Letta (MemGPT) research: attention spreads, but
+    /// more-relevant context measurably beats less-relevant context until
+    /// you hit the model's effective attention horizon. Empirically that
+    /// horizon for Gemma 4 E2B is ~40-50 K tokens; we stay well below it.
+    ///
+    /// When the flag is off, we fall back to the conservative behavior
+    /// (20 total, 10 topic) so a quality regression is one toggle away.
     private func gatherMemory() async -> [MemoryEntry] {
+        let longContext = EidosFeatureFlags.shared.longContextPackingEnabled
+        let topicK = longContext ? 30 : 10
+        let totalCap = longContext ? 60 : 20
+
         let index = memoryManager.index
         let p1 = await index.records(priority: .p1)
         let active = await index.records(tier: .activePriorities)
-        let hotTopics = await index.topK(10, tier: .topic)
+        let hotTopics = await index.topK(topicK, tier: .topic)
 
         // Merge, dedupe by id, preserve order (P1 → active → topic).
         var seen: Set<UUID> = []
@@ -76,7 +164,7 @@ struct ContextBuilder {
         for record in p1 + active + hotTopics {
             if seen.insert(record.id).inserted { ordered.append(record) }
         }
-        let top = ordered.prefix(20)
+        let top = ordered.prefix(totalCap)
 
         var entries: [MemoryEntry] = []
         entries.reserveCapacity(top.count)

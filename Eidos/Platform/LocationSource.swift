@@ -1,5 +1,8 @@
 import Foundation
 import CoreLocation
+#if canImport(MapKit)
+import MapKit
+#endif
 
 /// A compact place fix — what's worth remembering, not raw lat/lon.
 struct PlaceFix: Sendable, Equatable {
@@ -28,7 +31,6 @@ struct PlaceFix: Sendable, Equatable {
 final class LocationSource: NSObject, CLLocationManagerDelegate {
 
     private let manager = CLLocationManager()
-    private let geocoder = CLGeocoder()
 
     var lastFix: PlaceFix?
     var isMonitoring = false
@@ -72,7 +74,7 @@ final class LocationSource: NSObject, CLLocationManagerDelegate {
     }
 
     /// One-shot fix for callers that want "where am I right now?" —
-    /// e.g. ProactiveDigestGenerator on every refresh.
+    /// e.g. arrived-home dose triggers and ambient-snapshot context.
     func currentFix() async -> PlaceFix? {
         guard manager.authorizationStatus.isAuthorized else { return nil }
         let loc: CLLocation?
@@ -112,17 +114,25 @@ final class LocationSource: NSObject, CLLocationManagerDelegate {
     /// goes out once per significant change. Trade-off we accept for
     /// readable place names.
     private func reverseGeocode(_ location: CLLocation) async -> String? {
-        guard let placemarks = try? await geocoder.reverseGeocodeLocation(location),
-              let mark = placemarks.first else {
+        #if canImport(MapKit)
+        guard #available(iOS 26.0, macCatalyst 26.0, *) else {
             return nil
         }
-        if let name = mark.name, name.rangeOfCharacter(from: .decimalDigits) == nil {
+        guard let request = MKReverseGeocodingRequest(location: location),
+              let item = try? await request.mapItems.first else {
+            return nil
+        }
+        let mark = item.placemark
+        if let name = item.name, name.rangeOfCharacter(from: .decimalDigits) == nil {
             // Prefer a proper name ("Ferry Building") over a street number.
             return name
         }
         return [mark.subThoroughfare, mark.thoroughfare, mark.locality]
             .compactMap { $0 }
             .joined(separator: " ")
+        #else
+        return nil
+        #endif
     }
 
     // MARK: - CLLocationManagerDelegate
@@ -147,7 +157,13 @@ final class LocationSource: NSObject, CLLocationManagerDelegate {
 }
 
 private extension CLAuthorizationStatus {
+    /// True when the user has granted any form of location access.
+    /// `authorizedWhenInUse` is unavailable on macOS; guard the check.
     var isAuthorized: Bool {
-        self == .authorizedAlways || self == .authorizedWhenInUse
+        #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
+        return self == .authorizedAlways || self == .authorizedWhenInUse
+        #else
+        return self == .authorizedAlways
+        #endif
     }
 }

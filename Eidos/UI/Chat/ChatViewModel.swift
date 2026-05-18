@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import CoreGraphics
 
 /// Persists the conversation across app launches via SwiftData. Chat
 /// state lives as one `Conversation` with a chain of `ConversationMessage`
@@ -26,6 +27,31 @@ final class ChatViewModel {
     var isGenerating = false
     var errorMessage: String?
 
+    /// Surfaces an inline "warming up the vision model" notice the
+    /// first time the user sends an image-bearing chat on iPhone
+    /// during this app launch. The first multimodal generation pays
+    /// a 30-60 s Metal-kernel JIT-compile cost inside MLX's C++
+    /// runtime with zero Swift-visible activity — without this
+    /// notice, testers and demo users bail at 30 s thinking the app
+    /// has hung. Subsequent multimodal calls have cached kernels and
+    /// are fast, so the notice only fires once per launch. View clears
+    /// it when `isGenerating` flips false (and also enforces a 90 s
+    /// hard ceiling as a backstop via `.task(id:)`).
+    var warmupNoticeVisible = false
+
+    /// Latched once `warmupNoticeVisible` has fired this launch. Per-
+    /// app-launch lifetime by virtue of being a `ChatViewModel` instance
+    /// var — no UserDefaults, no persistence. The reset happens
+    /// implicitly when the VM is reconstructed on next cold start.
+    private var hasShownMultimodalWarmupNotice = false
+
+    /// Latest detected reminder/todo intent from the user's text.
+    /// Set in `send(...)` via `IntentExtractor.extract`; cleared when
+    /// the user saves or dismisses, or when they send a new message
+    /// that doesn't contain a trigger phrase. `nil` means no chip
+    /// renders below the conversation.
+    var suggestedIntent: IntentExtractor.Suggestion?
+
     // MARK: - Dependencies
 
     private let pipeline: RAGPipeline
@@ -36,8 +62,12 @@ final class ChatViewModel {
     private var conversation: Conversation?
     private var lastCrystallizedAt: Date?
     private var turnsSinceCrystallize = 0
-    private let crystallizeMinTurns = 3
-    private let crystallizeMinSeconds: TimeInterval = 60
+    private let crystallizeMinTurns = 2  // lowered from 3 — a 2-turn chat with a real fact is worth crystallizing
+    private let crystallizeMinSeconds: TimeInterval = 30  // lowered from 60 — bias toward more frequent memory writes
+
+    /// Read-only id of the currently-active conversation. Surfaced so
+    /// the History sheet can highlight which thread the user is in.
+    var currentConversationID: UUID? { conversation?.id }
 
     // MARK: - Init
 
@@ -71,26 +101,110 @@ final class ChatViewModel {
     }
 
     /// Starts a brand-new conversation. The old one stays in storage —
-    /// Phase 7+ can add a history browser.
+    /// `ChatHistoryView` lets users revisit prior conversations.
+    ///
+    /// Refuses to switch if a generation is in flight — switching mid-
+    /// stream would tear down SwiftData rows the streaming Task is
+    /// still appending tokens to, which has caused intermittent
+    /// crashes. The button is also disabled in the UI while
+    /// `isGenerating == true`, but this guard is a belt-and-braces
+    /// safeguard for any other call sites.
     func newConversation() {
+        guard !isGenerating else {
+            EidosLogger.shared.log(.warn, category: .chat,
+                event: "newConversation.blocked.generating",
+                message: "Refused to start a new conversation while a generation was in flight.",
+                failure: nil)
+            return
+        }
+
         // Crystallize the old session (if worth it) before switching.
+        // The crystallizer itself runs Gemma — keep it detached so the
+        // UI tap doesn't block on inference.
         triggerCrystallization()
+
         let fresh = Conversation()
         modelContext.insert(fresh)
         try? modelContext.save()
         conversation = fresh
         messages = []
+        streamingBuffer = ""
+        errorMessage = nil
         turnsSinceCrystallize = 0
         lastCrystallizedAt = nil
+
+        EidosLogger.shared.log(.info, category: .chat, event: "newConversation.created",
+            payload: ["conversation_id": fresh.id.uuidString])
+    }
+
+    /// Loads a previously-stored conversation back into the active view.
+    /// Used by the History tab so users can resume where they left off
+    /// (or just re-read old replies). Same `isGenerating` guard as
+    /// `newConversation()` to avoid tearing down state mid-stream.
+    func resumeConversation(_ target: Conversation) {
+        guard !isGenerating else {
+            EidosLogger.shared.log(.warn, category: .chat,
+                event: "resumeConversation.blocked.generating")
+            return
+        }
+        triggerCrystallization()
+        conversation = target
+        messages = target.messages
+            .sorted(by: { $0.timestamp < $1.timestamp })
+            .map { Message(id: $0.id, role: $0.role, content: $0.content, timestamp: $0.timestamp) }
+        streamingBuffer = ""
+        errorMessage = nil
+        turnsSinceCrystallize = 0
+        lastCrystallizedAt = nil
+        EidosLogger.shared.log(.info, category: .chat, event: "resumeConversation.loaded",
+            payload: ["conversation_id": target.id.uuidString, "messages": messages.count])
     }
 
     // MARK: - Send
 
-    func send(_ text: String) {
-        let userRow = appendMessage(role: "user", content: text)
+    /// Sends a user turn, optionally with attached image/audio media.
+    /// The media flows through the pipeline to Gemma's multimodal path
+    /// when the current model bridge supports it.
+    ///
+    /// Streaming applies a small **flush interval** (~60 ms) before
+    /// pushing buffered tokens into the assistant bubble. Without it
+    /// every single token triggered a SwiftUI redraw of the bubble
+    /// list + ScrollView reflow + ambient-glow recomputation, which
+    /// starved the MainActor enough during heavy generations that
+    /// the iOS process watchdog killed Eidos with no Swift error to
+    /// catch. 60 ms still feels like real-time streaming to the eye
+    /// (~16 fps) but cuts SwiftUI work by 10-20×.
+    func send(
+        _ text: String,
+        displayText: String? = nil,
+        image: CGImage? = nil,
+        audio: Data? = nil
+    ) {
+        let displayText = displayText ?? defaultDisplayText(for: text, image: image, audio: audio)
+        let userRow = appendMessage(role: "user", content: displayText)
         streamingBuffer = ""
         isGenerating = true
         errorMessage = nil
+
+        // First multimodal call of the session on iPhone — surface a
+        // patience notice so the user does not bail during MLX's
+        // vision-encoder JIT compile (30-60 s, silent inside C++).
+        // Mac / iPad / simulator don't hit the cliff, so they don't
+        // get the message. Only the *first* call shows it because
+        // subsequent calls reuse the cached kernels and are fast.
+        if image != nil
+            && DeviceProfile.formFactor == .iPhone
+            && !hasShownMultimodalWarmupNotice {
+            warmupNoticeVisible = true
+            hasShownMultimodalWarmupNotice = true
+        }
+
+        // Intent extraction — fast, deterministic, no Gemma round-trip.
+        // Runs on the user's text (not display text) so an autoSend
+        // intent's hidden prompt doesn't surface a confusing chip.
+        // Setting to nil when no hit clears any stale chip from the
+        // previous message.
+        suggestedIntent = IntentExtractor.extract(from: text)
 
         let history = messages.dropLast().map { (role: $0.role, content: $0.content) }
 
@@ -98,29 +212,143 @@ final class ChatViewModel {
             let assistantRow = appendMessage(role: "assistant", content: "")
             let assistantID = assistantRow.id
 
+            // Token batcher: accumulates raw chunks from MLX and only
+            // mutates the @Observable `messages[i].content` at most
+            // once per `flushIntervalNs` (60 ms). Each mutation is one
+            // SwiftUI invalidation; without batching we were doing
+            // 50-150 invalidations per second and the actor scheduler
+            // couldn't keep up.
+            let flushIntervalNs: UInt64 = 60_000_000  // 60 ms
+            var pendingFlushAt: UInt64 = DispatchTime.now().uptimeNanoseconds + flushIntervalNs
+            var sawFirstToken = false
+
+            // Local helper that writes the streaming buffer into the
+            // bubble. Skips silently if the row has been cleared
+            // (e.g. user tapped New Conversation mid-stream).
+            let pushToBubble: () -> Void = { [weak self] in
+                guard let self else { return }
+                if let i = self.messages.firstIndex(where: { $0.id == assistantID }) {
+                    self.messages[i].content = self.streamingBuffer
+                }
+            }
+
             do {
-                let stream = try await pipeline.chat(userMessage: text, history: history)
+                let stream = try await pipeline.chat(
+                    userMessage: text,
+                    history: history,
+                    image: image,
+                    audio: audio
+                )
                 for try await token in stream {
+                    if !sawFirstToken {
+                        sawFirstToken = true
+                        EidosLogger.shared.log(.info, category: .chat,
+                            event: "chat.first-token-received",
+                            payload: ["chunk_chars": token.count])
+                    }
                     streamingBuffer += token
-                    // Look up the message by id each tick — if the user
-                    // started a new conversation mid-stream, messages may
-                    // have been reset and the row is gone. Skip instead
-                    // of crashing with an out-of-bounds write.
-                    if let i = messages.firstIndex(where: { $0.id == assistantID }) {
-                        messages[i].content = streamingBuffer
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    if now >= pendingFlushAt {
+                        pushToBubble()
+                        pendingFlushAt = now + flushIntervalNs
                     }
                 }
+                // Final flush so the last few tokens don't sit invisibly.
+                pushToBubble()
                 updatePersisted(id: assistantID, content: streamingBuffer)
                 turnsSinceCrystallize += 1
-            } catch {
-                errorMessage = UserFacingError.message(for: error)
+                EidosLogger.shared.log(.info, category: .chat, event: "chat.send.done",
+                    payload: ["chars": streamingBuffer.count, "saw_first_token": sawFirstToken])
+                // Speak-replies hook (Med Mode + accessibility flow).
+                // Cheap no-op when the flag is OFF; cancels any
+                // queued utterance from the previous turn before
+                // starting the new one. Locale falls back to the
+                // user's preferred language on the device.
+                if EidosFeatureFlags.shared.speakRepliesEnabled,
+                   !streamingBuffer.isEmpty {
+                    let lang = Locale.preferredLanguages.first ?? "en-US"
+                    SpeechSynthesizer.shared.cancel()
+                    SpeechSynthesizer.shared.speak(streamingBuffer, languageCode: lang)
+                }
+            } catch is CancellationError {
+                // Stream was cancelled — usually the user starting a new
+                // conversation or switching tabs. Not an error from the
+                // user's perspective; just stop quietly.
+                pushToBubble()
                 updatePersisted(id: assistantID, content: streamingBuffer)
+                EidosLogger.shared.log(.info, category: .chat, event: "chat.send.cancelled",
+                    payload: ["chars": streamingBuffer.count])
+            } catch {
+                // Any other error surfaces in the chat as an error
+                // bubble + populates the assistant row with a clear
+                // message instead of leaving an empty bubble. This is
+                // the visible-failure-instead-of-silent-empty contract
+                // the README promises.
+                let userMessage = UserFacingError.message(for: error)
+                errorMessage = userMessage
+                if streamingBuffer.isEmpty {
+                    streamingBuffer = "(generation failed: \(userMessage))"
+                }
+                pushToBubble()
+                updatePersisted(id: assistantID, content: streamingBuffer)
+                EidosLogger.shared.error(.chat, event: "chat.send.error",
+                    error: error, failure: .modelGenerate)
             }
 
             streamingBuffer = ""
             isGenerating = false
+            // Drop the warmup notice on every terminal path (success,
+            // cancel, error). The view's `.task(id:)` backstop will
+            // also expire it on a 90 s ceiling if generation somehow
+            // never returns — but this is the normal clear path.
+            warmupNoticeVisible = false
             _ = userRow  // referenced for clarity
         }
+    }
+
+    // MARK: - Intent suggestion actions
+
+    /// Saves the current `suggestedIntent` as an active-priority
+    /// `MemoryEntry`. Clears the suggestion on success or failure
+    /// either way — re-prompting after a save attempt would feel
+    /// surveillant. The caller injects `memoryManager` to avoid
+    /// coupling ChatViewModel to AppContainer.
+    func saveSuggestion(into memoryManager: MemoryManager) async {
+        guard let suggestion = suggestedIntent else { return }
+        let entry = MemoryEntry(
+            tier: .activePriorities,
+            title: suggestion.title,
+            body: "Saved from chat: \"\(suggestion.originalPhrase)\"",
+            priority: .p3,
+            tags: ["chat-saved", suggestion.kind.rawValue]
+        )
+        _ = try? await memoryManager.save(entry)
+        suggestedIntent = nil
+    }
+
+    /// Clears the suggestion without saving. Idempotent.
+    func dismissSuggestion() {
+        suggestedIntent = nil
+    }
+
+    private func defaultDisplayText(for text: String, image: CGImage?, audio: Data?) -> String {
+        let markers = [image != nil ? "📷" : nil, audio != nil ? "🎙️" : nil]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        guard !markers.isEmpty else { return text }
+        if text.isEmpty {
+            switch (image != nil, audio != nil) {
+            case (true, true):
+                return "📷 🎙️ Image and voice note attached"
+            case (true, false):
+                return "📷 Image attached"
+            case (false, true):
+                return "🎙️ Voice note attached"
+            default:
+                return ""
+            }
+        }
+        return "\(text)  \(markers)"
     }
 
     // MARK: - End of session (called from ChatView.onDisappear)
