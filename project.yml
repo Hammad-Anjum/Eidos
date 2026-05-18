@@ -1,0 +1,189 @@
+name: Eidos
+options:
+  bundleIdPrefix: com.hissamuddin
+  deploymentTarget:
+    # iOS 26+ unlocks Apple's Foundation Models framework (`@Generable`
+    # for grammar-constrained structured output), required for 100%
+    # valid tool-call JSON. Realistic minimum anyway since Gemma 4 via
+    # MLX needs Apple Silicon A17+ which correlates with iOS 26 devices.
+    iOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    DEVELOPMENT_TEAM: ""
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CODE_SIGN_STYLE: Automatic
+
+packages:
+  mlx-swift-lm:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    branch: main
+  swift-transformers:
+    url: https://github.com/huggingface/swift-transformers
+    from: 1.3.0
+  swift-huggingface:
+    url: https://github.com/huggingface/swift-huggingface
+    from: 0.9.0
+
+targets:
+  Eidos:
+    type: application
+    platform: iOS
+    # Mac Catalyst is the dev-testing target. It gives the app access
+    # to the full system RAM (no iPad jetsam, no memory pressure on the
+    # 1.5 GB Gemma 4 E2B model). iPhone build paths (iOS device, iOS
+    # simulator) remain valid destinations for device-specific
+    # validation; the iPhone is the hackathon demo target.
+    supportedDestinations:
+      - iOS
+      - macCatalyst
+    sources:
+      - path: Eidos
+        excludes:
+          - "Resources/Info.plist"
+          - "Resources/Eidos.entitlements"
+      - path: EidosShared
+    resources:
+      - path: Eidos/Resources
+        excludes:
+          - "Info.plist"
+          - "Eidos.entitlements"
+          - "corpora"
+      # Bundled MedlinePlus drug fact-sheet corpus. Added as a folder
+      # reference so subdirectory paths survive into the app bundle —
+      # `BundledCorpusLoader` uses `Bundle.main.urls(forResourcesWithExtension:
+      # subdirectory:)` which requires the folder structure to be
+      # preserved (vs flattened into the bundle root).
+      - path: Eidos/Resources/corpora
+        type: folder
+    info:
+      path: Eidos/Resources/Info.plist
+      properties:
+        # Marketing + build version. Bumped each tester drop so the
+        # ModelDownloader fresh-download marker (`fresh.<short>.<build>`)
+        # auto-rotates and forces a clean state.
+        CFBundleShortVersionString: "1.1.0"
+        CFBundleVersion: "13"
+        # Permissions for the AuADHD-companion build (2026-05-12 pivot):
+        #   - microphone + speech recognition for Journal + Ground + voice chat
+        #   - calendar for PickNextTaskSkill to surface "next event in <90 min"
+        #     as a built-in stop signal during decision-paralysis flows
+        #   - camera + photo library for the Look tile's BreakDownSceneSkill
+        # Carried over from medical-helper but unused in AuADHD v1 (kept
+        # to avoid re-prompting users on upgrade): contacts, reminders,
+        # health, location. These can be pulled if v2 doesn't need them.
+        NSMicrophoneUsageDescription: "Eidos transcribes your voice on-device so you can journal, ground, and ask hands-free. Audio never leaves your iPhone."
+        NSSpeechRecognitionUsageDescription: "Eidos uses Apple's on-device speech recognition to turn your voice into text. Your speech is never sent to a server."
+        NSCalendarsFullAccessUsageDescription: "Eidos reads your next calendar event so the What Now flow can offer a built-in stop signal (\"you have 23 minutes before X\"). Event data never leaves your iPhone."
+        NSContactsUsageDescription: "Eidos uses your contacts to understand who you mean when you reference a person by name in journal entries. Contact data never leaves your iPhone."
+        NSRemindersFullAccessUsageDescription: "Eidos may create a reminder from a journal entry on request. Reminder data never leaves your iPhone."
+        NSHealthShareUsageDescription: "Reserved for v2 — sensory-regulation biofeedback via HRV. Not used in v1. Data never leaves your iPhone."
+        NSHealthUpdateUsageDescription: "Eidos doesn't write to HealthKit. This permission is required by iOS when requesting any health access."
+        CFBundleURLTypes:
+          - CFBundleURLName: com.hissamuddin.eidos
+            CFBundleURLSchemes:
+              - eidos
+        NSLocationWhenInUseUsageDescription: "Reserved for v2 — location-aware nudges. Not used in v1."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "Reserved for v2. Not used in v1."
+        NSCameraUsageDescription: "Eidos uses the camera for the Look flow — point at a cluttered scene and Gemma 4 narrates a 3-step plan, on-device. Images never leave your iPhone."
+        NSPhotoLibraryUsageDescription: "Eidos reads photos you explicitly pick so Gemma 4 can describe the scene for a step-by-step plan, on-device. Images never leave your iPhone."
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        # iOS 14+ launch-screen definition. Without this, iOS assumes
+        # the app is pre-iPhone-X and letterboxes the UI with big black
+        # bars on top and bottom. An empty dict = "use a default blank
+        # launch screen that respects the full display."
+        UILaunchScreen:
+          UIColorName: ""
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Background processing for medication-adherence nudges.
+        # Identifier matches `BGTaskSchedulerPermittedIdentifiers`
+        # at register-time — typo'ing either side breaks scheduling
+        # silently.
+        UIBackgroundModes:
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.hissamuddin.eidos.nudges.daily
+    entitlements:
+      path: Eidos/Resources/Eidos.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.security.application-groups:
+          - group.com.hissamuddin.eidos
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hissamuddin.eidos
+        CODE_SIGN_ENTITLEMENTS: Eidos/Resources/Eidos.entitlements
+        INFOPLIST_FILE: Eidos/Resources/Info.plist
+        # Mac Catalyst: native macOS app, full system RAM access.
+        SUPPORTS_MACCATALYST: YES
+        SUPPORTS_UIKITFORMAC: YES
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+    dependencies:
+      # Widget extension is iOS-only; skipped when building for Mac
+      # Catalyst (Catalyst is a macOS platform and can't embed iOS
+      # `.appex` bundles). Tomorrow it carries the medication-countdown
+      # widget + Live Activity + Control Widget surfaces.
+      - target: EidosWidget
+        platformFilter: iOS
+      - package: mlx-swift-lm
+        product: MLXLLM
+      - package: mlx-swift-lm
+        product: MLXLMCommon
+      - package: mlx-swift-lm
+        product: MLXVLM         # vision-language models (Gemma 4 image input for pill-bottle OCR)
+      - package: mlx-swift-lm
+        product: MLXHuggingFace
+      - package: swift-transformers
+        product: Tokenizers
+      - package: swift-huggingface
+        product: HuggingFace
+
+  EidosWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: EidosWidget
+        excludes:
+          - "Info.plist"
+          - "EidosWidget.entitlements"
+      - path: EidosShared
+    info:
+      path: EidosWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Eidos
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: EidosWidget/EidosWidget.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.hissamuddin.eidos
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hissamuddin.eidos.Widget
+        CODE_SIGN_ENTITLEMENTS: EidosWidget/EidosWidget.entitlements
+        INFOPLIST_FILE: EidosWidget/Info.plist
+
+schemes:
+  Eidos:
+    build:
+      targets:
+        Eidos: all
+        EidosWidget: all
+    run:
+      config: Debug
+    archive:
+      config: Release

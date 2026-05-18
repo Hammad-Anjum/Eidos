@@ -1,0 +1,32 @@
+# Xcode
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+build-catalyst/
+.build/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# CocoaPods
+Pods/
+Podfile.lock
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+
+# Model files (downloaded at runtime, not checked in)
+*.task
+*.tflite
+*.gguf
+*.mlpackage
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log

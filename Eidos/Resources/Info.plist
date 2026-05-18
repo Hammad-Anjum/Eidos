@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.hissamuddin.eidos.nudges.daily</string>
+	</array>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.1.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.hissamuddin.eidos</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>eidos</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>13</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Eidos reads your next calendar event so the What Now flow can offer a built-in stop signal ("you have 23 minutes before X"). Event data never leaves your iPhone.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Eidos uses the camera for the Look flow — point at a cluttered scene and Gemma 4 narrates a 3-step plan, on-device. Images never leave your iPhone.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Eidos uses your contacts to understand who you mean when you reference a person by name in journal entries. Contact data never leaves your iPhone.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Reserved for v2 — sensory-regulation biofeedback via HRV. Not used in v1. Data never leaves your iPhone.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Eidos doesn't write to HealthKit. This permission is required by iOS when requesting any health access.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Reserved for v2. Not used in v1.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Reserved for v2 — location-aware nudges. Not used in v1.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Eidos transcribes your voice on-device so you can journal, ground, and ask hands-free. Audio never leaves your iPhone.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Eidos reads photos you explicitly pick so Gemma 4 can describe the scene for a step-by-step plan, on-device. Images never leave your iPhone.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Eidos may create a reminder from a journal entry on request. Reminder data never leaves your iPhone.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Eidos uses Apple's on-device speech recognition to turn your voice into text. Your speech is never sent to a server.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>

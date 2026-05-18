@@ -1,0 +1,424 @@
+EIDOS — KAGGLE GEMMA 4 GOOD HACKATHON
+iPhone 17 / 17 Pro beta test walkthrough
+
+Audience: the cofounder with the physical iPhone 17 Pro.
+Scope: only tasks the simulator cannot exercise + every surface that
+will appear in the 3-minute demo video.
+Run the tasks in order. Each task has the same shape:
+
+  TASK N: Title
+    What it does:       one sentence on the underlying flow.
+    Intended behavior:  what should happen on success.
+    How to check:       the specific observation that confirms PASS.
+
+Stop if any CRITICAL task fails — fix or document before continuing.
+
+
+--- PHASE A · SETUP AND FIRST LAUNCH ------------------------------------
+
+
+TASK 1: Sideload the build onto the iPhone
+  What it does:       Installs the AuADHD branch IPA / Xcode build to the device.
+  Intended behavior:  Eidos icon appears on the home screen.
+  How to check:       Tap the icon; it launches without crashing.
+
+
+TASK 2: Onboarding — Welcome screen
+  What it does:       First-launch greeting before any model state exists.
+  Intended behavior:  Lock-shield icon, "Welcome to Eidos", tagline
+                      "A pocket presence for the days when planning has
+                      already failed." Two CTAs: Get Started, Skip the tour.
+  How to check:       Both CTAs visible; tagline reads exactly as above.
+
+
+TASK 3: Onboarding — "How Eidos is different" cards
+  What it does:       Three audience-anchored cards establish the tone before
+                      the user reaches the model download.
+  Intended behavior:  Cards read: "Nothing leaves your phone", "No streaks,
+                      no shame", "Two taps to skip everything".
+  How to check:       Tap Get Started on the welcome screen; three cards
+                      render in order; Continue advances to variant pick.
+
+
+TASK 4: Onboarding — Variant pick
+  What it does:       User chooses Gemma 4 E2B (default) or E4B (15 Pro+).
+  Intended behavior:  Both variants visible; E2B is selected by default with
+                      the green hint "Faster, lower memory — safer first test";
+                      E4B is shown in orange ("~5.3 GB — needs iPhone 15 Pro+").
+  How to check:       Confirm E2B is selected; tap Download.
+
+
+TASK 5: Onboarding — IdentityStep
+  What it does:       Optional name + purpose capture. Name persists to
+                      UserDefaults; purpose persists as a P1 core-identity
+                      memory.
+  Intended behavior:  Both fields skippable. If filled, name appears in
+                      future greeting variations; purpose is searchable in
+                      Memory.
+  How to check:       Enter a test name + pick "Daily executive function";
+                      tap Continue. App moves to the Model download step.
+
+
+TASK 6: Model download (Gemma 4 E2B, ~3.4 GB)
+  What it does:       Pulls Gemma 4 E2B weights from HuggingFace. This is
+                      the ONLY outbound network request the app ever makes.
+  Intended behavior:  Progress bar advances; phase transitions
+                      downloading → loading → ready. App auto-transitions
+                      to Home after "ready".
+  How to check:       Progress reaches 100% without "Not enough storage"
+                      errors; Home tab renders. Time on Wi-Fi: ~5-12 min.
+
+
+TASK 7: Calendar + Microphone + Camera permission prompts
+  What it does:       iOS shows the permission alerts on first use of each
+                      hardware feature.
+  Intended behavior:  Each prompt shows the exact NSUsageDescription text
+                      from Info.plist; granting unlocks the relevant surface.
+  How to check:       When prompted (during steps 8 / 13 / 14), tap Allow.
+                      Confirm the description mentions "on-device" + "never
+                      leaves your iPhone".
+
+
+--- PHASE B · TECHNICAL CHECKS BEFORE FILMING ----------------------------
+
+
+TASK 8: Diagnostics — direct Gemma smoke test
+  What it does:       Bypasses the chat layer, RAG pipeline, SwiftData, and
+                      tool loop. Calls GemmaSession.generate directly with a
+                      4-token prompt. Proves the MLX stack is alive.
+  Intended behavior:  "Time to first token" appears under 3 seconds; total
+                      time logged in milliseconds; status pill turns green.
+  How to check:       Settings → tap version row 5× if needed → Diagnostics
+                      → Smoke tab → tap "Run smoke test". Output ends in a
+                      coherent reply (not "Simulator mock").
+
+
+TASK 9: Flag check — minimal chat prompt must be OFF
+  What it does:       The minimal chat prompt skips the tool catalogue. With
+                      it ON, tool-calling surfaces (Look, What Now) silently
+                      degrade to plain chat.
+  Intended behavior:  Toggle is OFF on the demo build.
+  How to check:       Settings → Diagnostics → Flags. Confirm "Minimal chat
+                      prompt" toggle is OFF. THIS IS THE SINGLE HIGHEST-COST
+                      MISTAKE ON DEMO DAY — confirm before recording.
+
+
+--- PHASE C · THE FIVE FLAGSHIP SURFACES ---------------------------------
+
+
+TASK 10: Today's update bubble on Home
+  What it does:       Pulls calendar + memory + body-double count to render
+                      one contextual line under the greeting. Updates when
+                      Home re-appears.
+  Intended behavior:  Bubble reads e.g. "23 min before standup · 5 priorities
+                      open" or, if quiet, "Quiet day so far."
+  How to check:       Open Home. Bubble line is non-empty and factually
+                      matches what's in your real Calendar + Memory.
+
+
+TASK 11: Energy slider — drag and observe the tile fade
+  What it does:       Slider value is persisted via @AppStorage and drives
+                      the 2x2 tile opacity (burnout 0.50 → high 1.0).
+                      Each change writes a P4 memory entry tagged "energy".
+  Intended behavior:  Dragging to 0 ("burnout") visibly dims Look / Ground /
+                      Journal / What Now. Dragging back to 4 ("high")
+                      restores full saturation. Sit With Me hero never dims.
+  How to check:       Drag slider; confirm visual fade animates smoothly.
+                      Then open Memory tab — two new "Energy → N (label)"
+                      entries appear in the All memories list.
+
+
+TASK 12: Look — multimodal vision flow (Gemma 4 feature: vision)
+  What it does:       Tap the Look tile → real camera → user shoots a
+                      cluttered scene → Gemma 4 vision parses the photo and
+                      emits a structured tool call to break_down_scene.
+                      Result: one spoken 5-minute starting action.
+  Intended behavior:  Reply is short (1-2 sentences), names a concrete first
+                      action (e.g. "Start with the coffee mug. Five minutes
+                      — that's the whole commitment.").
+  How to check:       Shoot a real cluttered desk. Reply names something
+                      actually in the photo; the breakdown entry appears
+                      in Memory tab → Today section as a "scene broken down".
+
+
+TASK 13: What Now — decision paralysis flow (Gemma 4 feature: function calling)
+  What it does:       Voice or tap input triggers pick_next_task. Skill
+                      reads activePriorities + calendar + current energy
+                      slider and returns ONE pick + a sized commitment line.
+  Intended behavior:  Reply names a single priority by title + a time-box
+                      ("Five minutes. That's the whole commitment."). If a
+                      calendar event is < 90 min away, it's mentioned as
+                      context.
+  How to check:       Tap What Now tile. Reply is a single sentence, names
+                      one item from your active priorities, and reflects
+                      the current energy level (shorter time-box at low
+                      energy).
+
+
+TASK 14: Journal — voice capture
+  What it does:       Full-screen mic UI captures speech via on-device
+                      SFSpeechRecognizer. Transcript saves verbatim as a
+                      P3 memory entry, indexed for same-turn recall.
+  Intended behavior:  Tap to start, tap to stop, "Saved." spoken aloud,
+                      view dismisses.
+  How to check:       Tap Journal tile. Speak for 15-30 seconds about
+                      something specific (e.g. "I had a conversation with
+                      Maya about the Q3 timeline today and it didn't go
+                      well"). Stop. Hear "Saved." Confirm an entry titled
+                      "Journal — [date]" appears in Memory.
+
+
+TASK 15: Hero clip — ramble → immediate recall
+  What it does:       Verifies the onSave hook auto-indexes the journal
+                      into the semantic recall store on the same turn.
+                      Demonstrates that memory writes are usable instantly.
+  Intended behavior:  Chat tab → ask about something you JUST journaled.
+                      Reply pulls language from your transcript.
+  How to check:       After Task 14, go to Chat tab. Type "what did I say
+                      about Maya?" Reply references the Q3 timeline / your
+                      exact phrasing. No "nothing recorded about that yet."
+
+
+TASK 16: Ground — RSD / overwhelm flow
+  What it does:       Voice prompt triggers the deterministic grounding
+                      script (acknowledge → 5-4-3-2-1 → breath → one
+                      physical action). Spoken aloud via SpeechSynthesizer.
+                      Ends without a follow-up question.
+  Intended behavior:  Reply is 3-4 sentences, includes a sensory cue, a
+                      breath cue, one action. DOES NOT end with "would you
+                      like to talk about it" or any question.
+  How to check:       Tap Ground tile (or chat: "I just got criticized, I
+                      want to quit"). Listen to the reply end-to-end.
+                      Confirm no trailing question.
+
+
+TASK 17: Sit With Me — flagship body-doubling flow (audience-fit hero)
+  What it does:       The Eidos differentiator. User picks duration (5/10/
+                      15/25 min), types or speaks what they're working on,
+                      taps the purple CTA. Tone-aware opener plays aloud.
+                      Silent timer. Slow breath dot. One halfway check-in.
+                      Closing line.
+  Intended behavior:  Default duration adapts to the current energy slider:
+                      0-1=5 min, 2-3=10 min, 4=25 min. Opening line is one
+                      of five archetypes keyed off the task text.
+  How to check:       From Home → Sit With Me hero card. Type "I'm
+                      panicking about taxes" → start. Should hear "Slow it
+                      down with me. We'll start when you've taken one full
+                      breath." Repeat with "I'm so depressed I can't move"
+                      → should hear "It's been heavy. I'm here. Start
+                      whenever feels possible."
+
+
+TASK 18: Sit With Me — +5 min extend, halfway, and close
+  What it does:       The extend button silently adds 5 minutes to both
+                      remaining and total seconds. Halfway threshold tracks
+                      the new total. Closing line plays at 0:00.
+  Intended behavior:  Pressing +5 min jumps the clock silently (no
+                      announcement). At the new midpoint, "You're N minutes
+                      in." plays. At 0:00, "Done. That's it." plays. Done
+                      screen auto-dismisses after ~2 seconds.
+  How to check:       Start a 5-min session. Wait until 1:00 remaining.
+                      Tap +5 min. Confirm clock jumps to 6:00. Wait for the
+                      halfway and closing announcements. After completion,
+                      Memory tab → Today section shows "1 body-double
+                      session" with your task title.
+
+
+--- PHASE D · MEMORY, EXPORTS, AND THE PRIVACY MOAT ----------------------
+
+
+TASK 19: Memory tab — Privacy ribbon (the visible moat)
+  What it does:       Slim ribbon at the top of the Memory tab surfaces
+                      live counts: memories on disk, KB used, bytes sent
+                      (always 0), egress lockdown timestamp.
+  Intended behavior:  Always shows three stats + a lockdown timestamp from
+                      when EgressGuard armed (a few seconds after bootstrap).
+                      Tappable.
+  How to check:       Memory tab → confirm ribbon reads "N memories · X KB
+                      on disk · 0 sent" with a subtitle "Egress lockdown
+                      active since HH:MM".
+
+
+TASK 20: Memory tab — Privacy Receipt sheet
+  What it does:       Full breakdown: posture explainer + per-tier memory
+                      count + last decay-pass result + egress lockdown
+                      status + export-everything button.
+  Intended behavior:  Sheet opens on ribbon tap. Per-tier counts add up to
+                      the total shown in the ribbon. Egress card reads
+                      "Active since [date + time]" with a green seal.
+  How to check:       Tap the ribbon. Confirm sheet opens, tier counts sum
+                      correctly, Done dismisses.
+
+
+TASK 21: Memory tab — Today section
+  What it does:       Daily recap grouped by skill source (body-double,
+                      scene, journal, task-picked). Empty state is
+                      "Quiet day so far."
+  Intended behavior:  Shows 4 grouped categories with counts based on
+                      today's activity. Plurals are correct ("1 body-
+                      double session", "2 journal entries").
+  How to check:       After completing Tasks 14, 17, and 18, the Today
+                      section should show "1 body-double session" and
+                      "1 journal entry" with your titles.
+
+
+TASK 22: Weekly Summary export
+  What it does:       Pure deterministic enumeration of the past 7 days of
+                      memory writes. Renders to markdown and hands the file
+                      URL to the iOS share sheet.
+  Intended behavior:  File contains sections: At a glance / Body-double
+                      sessions / Scene break-downs / Journal entries /
+                      Tasks picked / Current active priorities. No
+                      `<untrusted>` scaffolding leaks. Empty-week fallback
+                      is a single "Quiet week" line.
+  How to check:       Memory tab → ⋯ menu (top-right) → Share weekly
+                      summary. Share sheet appears; tap Save to Files;
+                      open the .md file; confirm sections render and reflect
+                      today's actual data.
+
+
+TASK 23: Session Report — Gemma-summarized professional briefing
+  What it does:       Hybrid summary for a professional reader. Deterministic
+                      facts (counts, commitments) + Gemma-summarized themes +
+                      Gemma-selected verbatim notable excerpts. Preview lets
+                      user edit before sharing.
+  Intended behavior:  Generation takes 10-30 seconds. Themes section
+                      contains 3-4 short bullets in the user's own
+                      vocabulary. Notable entries contains 1-2 quoted
+                      excerpts. Every Gemma-touched section is provenance-
+                      marked. Disclaimer line in the header reads "Not a
+                      diagnostic record."
+  How to check:       PRE-REQUISITE: have at least 2 journal entries from
+                      this week. Settings → Share → Generate session report.
+                      Watch generation complete. Tap Edit, change a word,
+                      tap Done editing, tap Share. Confirm iOS share sheet
+                      offers the .md file.
+
+
+--- PHASE E · MULTILINGUAL (Gemma 4 feature: multilingual reasoning) -----
+
+
+TASK 24: Multilingual smoke — non-English Ground or Look
+  What it does:       Combines Apple's on-device SFSpeechRecognizer
+                      (50+ languages) with Gemma 4's multilingual model.
+                      Confirms the same surface works in a second language
+                      with no code change.
+  Intended behavior:  Voice input in Spanish (or Arabic / French / etc.)
+                      is transcribed accurately and Gemma replies in the
+                      same language.
+  How to check:       iOS Settings → Siri & Search → Language → add
+                      Spanish. Back in Eidos → Chat → mic → say
+                      "Estoy abrumado, ayúdame a calmarme." Confirm the
+                      transcription is correct AND Gemma's reply is in
+                      Spanish.
+
+
+--- PHASE F · PRIVACY PROOF ----------------------------------------------
+
+
+TASK 25: Airplane Mode end-to-end (strongest privacy demo)
+  What it does:       Disconnects the device from any network. Confirms
+                      every surface keeps working without internet.
+                      Visually proves "nothing leaves your phone."
+  Intended behavior:  Look, Ground, Journal, What Now, Sit With Me all
+                      complete normally. Speech recognition and synthesis
+                      still work. Gemma still generates.
+  How to check:       Toggle Airplane Mode ON (visible in the recording
+                      shot). Fire all five surfaces in sequence. Confirm
+                      each one completes its full round-trip. Toggle
+                      Airplane Mode OFF when done.
+
+
+TASK 26: tcpdump zero-egress audit
+  What it does:       Captures every packet leaving the iPhone during a
+                      full surface walk. Proves EgressGuard's claim is
+                      enforced in code, not just in policy.
+  Intended behavior:  Pcap contains zero outbound traffic attributable to
+                      Eidos during the surface walk (Gemma model already
+                      downloaded, so no HuggingFace traffic either).
+  How to check:       On the Mac with iPhone plugged in via USB:
+                        rvictl -s $(idevice_id -l)
+                        sudo tcpdump -i rvi0 -w eidos-demo.pcap port not 5223
+                      Walk through all 5 surfaces on the iPhone, then:
+                        sudo killall tcpdump
+                        rvictl -x $(idevice_id -l)
+                      Open eidos-demo.pcap in Wireshark; filter by
+                      host == huggingface.co (empty) and by any other
+                      Eidos-attributable traffic (empty). Screenshot for
+                      the write-up.
+
+
+--- PHASE G · TECHNICAL EXECUTION EVIDENCE -------------------------------
+
+
+TASK 27: Benchmark sweep — auADHD reliability gate
+  What it does:       Runs the AuADHD benchmark corpus (scene-tool, what-
+                      now-tool, recall-tool, ground-prompt) 10 iterations
+                      per fixture. Captures latency + pass rate JSONL for
+                      the technical write-up.
+  Intended behavior:  Pass rate per fixture ≥85% (the agreed reliability
+                      gate). Median TTFT and median tokens-per-second
+                      visible in the summary.
+  How to check:       Settings → Diagnostics → Benchmarks → tap "Run
+                      benchmarks". Wait for completion (~3-5 min). Confirm
+                      the summary shows ≥85% per fixture in the "By
+                      category" section. Tap Share to export the JSONL.
+
+
+--- PHASE H · DEMO VIDEO REHEARSAL ---------------------------------------
+
+
+TASK 28: 3-minute demo take
+  What it does:       The hackathon submission deliverable. Single
+                      continuous(ish) take demonstrating the full pitch
+                      with VoiceOver on + screen curtain (audience
+                      accessibility signal).
+  Intended behavior:  All five surfaces fire cleanly. Hero ramble→recall
+                      lands. Sit With Me opens with tone-matched line.
+                      Airplane mode toggle on-camera proves the moat.
+  How to check:       Per PRODUCT.md script:
+                        0:00-0:15  Black card; phone shows Airplane Mode
+                                   ON; app launch.
+                        0:15-0:45  Look at cluttered desk → spoken plan.
+                        0:45-1:15  Voice "What now, energy two" → one task.
+                        1:15-1:50  Journal ramble about Maya; seconds
+                                   later in chat ask "what did I say
+                                   about Maya?" → recalled.
+                        1:50-2:20  Voice "I just got criticized, I want
+                                   to quit" → grounding script + breath.
+                        2:20-2:45  Tap Sit With Me hero → "I need to file
+                                   taxes" → tone-matched opener → time-
+                                   lapse to halfway.
+                        2:45-3:00  Close card with GitHub URL.
+                      Shoot 2-3 takes per surface. iPhone may OOM on a
+                      take; pick the survivor. Mac Catalyst is the
+                      safety-net backup per surface if every iPhone take
+                      fails.
+
+
+--- ARTIFACTS TO COLLECT FOR THE TECHNICAL WRITE-UP ----------------------
+
+  - eidos-demo.pcap                 (Task 26)
+  - Wireshark screenshot (zero      (Task 26)
+    Eidos packets during walk)
+  - Sample Weekly Summary .md       (Task 22)
+  - Sample Session Report .md       (Task 23)
+  - Benchmark JSONL                 (Task 27)
+  - Final 3-minute demo .mp4        (Task 28)
+  - Diagnostics smoke screenshot    (Task 8)
+  - One multilingual screenshot     (Task 24)
+
+
+--- PASS / FAIL REPORTING ------------------------------------------------
+
+When done, reply with:
+  - The number of any task that failed
+  - For each failed task, paste the actual observation
+  - Whether Task 27 hit the ≥85% gate per fixture
+  - Whether Task 28 produced a usable take on iPhone, or whether the
+    backup Mac Catalyst take was needed
+  - Whether Task 26's pcap shows zero egress
+
+Failures get folded into the write-up's honest "Limitations" section.
+We do not lie about what didn't work; the audience this app exists
+for would never trust us if we did.
