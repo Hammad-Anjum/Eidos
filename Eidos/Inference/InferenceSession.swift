@@ -1,8 +1,9 @@
 import Foundation
 import CoreGraphics
 
-/// Decouples consumers (RAGPipeline, MemoryCrystallizer, DigestGenerator)
-/// from the concrete inference backend. Today the only implementation
+/// Decouples consumers (RAGPipeline, MemoryCrystallizer, and the
+/// medical skills shipping tomorrow) from the concrete inference
+/// backend. Today the only implementation
 /// is `GemmaSession` (mlx-swift-lm + Gemma 4 E2B). When a future
 /// backend lands — Qwen 2.5 VL via mlx-swift-lm, an Apple Foundation
 /// Models adapter, or LiteRT-LM — a new conformance can drop in

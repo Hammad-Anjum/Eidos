@@ -144,6 +144,17 @@ struct ChatInputBar: View {
 
     // MARK: - Camera
 
+    // MARK: - Compose-bar tap-target rationale
+    //
+    // The Home tiles (Look / Ground / Journal / What Now) are the
+    // primary AuADHD eyes-closed surfaces and use 130pt tap targets.
+    // Inside the chat composer the user is already engaged with the
+    // app — vision and focus are present — so we use Apple HIG's 44pt
+    // accessibility minimum rather than the 88pt tile bar. The visual
+    // icon stays compact; `.contentShape(Rectangle())` widens the
+    // hit area to the full 44pt frame so tremor / shaky-finger users
+    // still land cleanly without ballooning the row height.
+
     private var cameraButton: some View {
         Button {
             showCamera = true
@@ -151,7 +162,8 @@ struct ChatInputBar: View {
             Image(systemName: "camera.fill")
                 .font(.system(size: 22))
                 .foregroundStyle(Color.accentColor.opacity(0.9))
-                .frame(width: 36, height: 36)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .disabled(isGenerating || !visionService.cameraAvailable)
         .opacity(visionService.cameraAvailable ? 1 : 0.35)
@@ -165,7 +177,8 @@ struct ChatInputBar: View {
             Image(systemName: "photo.fill.on.rectangle.fill")
                 .font(.system(size: 22))
                 .foregroundStyle(Color.accentColor.opacity(0.9))
-                .frame(width: 36, height: 36)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .disabled(isGenerating)
         .accessibilityLabel("Pick photo")
@@ -181,9 +194,10 @@ struct ChatInputBar: View {
                 .font(.system(size: 28))
                 .foregroundStyle(isRecordingAudio ? Color.red : Color.accentColor.opacity(0.9))
                 .symbolEffect(.pulse, options: .repeating, isActive: isRecordingAudio)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .disabled(isGenerating)
-        .frame(width: 36, height: 36)
         .accessibilityLabel(isRecordingAudio ? "Stop recording" : "Start voice input")
     }
 
@@ -207,6 +221,8 @@ struct ChatInputBar: View {
                     .font(.body.weight(.bold))
                     .foregroundStyle(.white)
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
         }
         .disabled(!canSend)
         .accessibilityLabel("Send")
@@ -226,7 +242,26 @@ struct ChatInputBar: View {
 
     @MainActor
     private func toggleRecording() async {
-        if EidosFeatureFlags.shared.audioViaGemmaEnabled && GemmaSession.supportsNativeAudioInput {
+        let useGemma = EidosFeatureFlags.shared.audioViaGemmaEnabled
+            && GemmaSession.supportsNativeAudioInput
+
+        // Defensive: if the flag was toggled in Settings while a
+        // recording was in flight on the OTHER path, the inactive
+        // service is still holding the mic / AVAudioSession. Stop it
+        // before dispatching, so the user doesn't end up with a
+        // ghost recorder running until the app is killed.
+        if useGemma, transcriber.isRecording {
+            transcriber.stop()
+            EidosLogger.shared.log(.warn, category: .chat,
+                event: "audio.toggle.stale-transcriber-stopped")
+        }
+        if !useGemma, audioCapture.isRecording {
+            _ = try? await audioCapture.stopAndReturnBuffer()
+            EidosLogger.shared.log(.warn, category: .chat,
+                event: "audio.toggle.stale-audioCapture-stopped")
+        }
+
+        if useGemma {
             await toggleGemmaAudio()
         } else {
             await toggleTranscriber()

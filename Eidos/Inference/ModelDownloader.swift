@@ -31,6 +31,12 @@ final class ModelDownloader {
         static let modelDownloaded = "eidos.modelDownloaded"
         static let selectedVariant = "eidos.variant"
         static let testerFreshDownloadMarker = "eidos.testerFreshDownloadMarker"
+        /// Test/diagnostic override. When `true`, `isModelDownloaded`
+        /// returns `false` regardless of disk state or simulator gate,
+        /// routing the user back through `OnboardingView`. Cleared
+        /// automatically by `markModelReady()` once the user completes
+        /// the onboarding download step.
+        static let forceOnboarding = "EidosForceOnboarding"
     }
 
     /// Release-only tester reset. The marker now incorporates **the build
@@ -64,6 +70,16 @@ final class ModelDownloader {
     }
 
     var isModelDownloaded: Bool {
+        // Force-onboarding override. Set via the launch arg
+        // `-EidosForceOnboarding YES` (NSArgumentDomain → UserDefaults),
+        // or via Settings → Diagnostics → "Re-run onboarding." Wins over
+        // every other gate including the simulator short-circuit so
+        // testers can step through the onboarding flow without flashing
+        // a physical device. Cleared automatically once the user reaches
+        // the model-download step (see `markModelReady`).
+        if UserDefaults.standard.bool(forKey: Keys.forceOnboarding) {
+            return false
+        }
         // Simulator has no real MLX — `GemmaSession.load()` is a mock that
         // just flips `isLoaded = true`. Downloading multi-GB weights into
         // a sim that can't use them is wasted bandwidth, so we short-
@@ -137,6 +153,11 @@ final class ModelDownloader {
 
     func markModelReady() {
         UserDefaults.standard.set(true, forKey: Keys.modelDownloaded)
+        // Clear the force-onboarding override once the user has actually
+        // landed on (or past) the download step. Without this, the next
+        // launch would loop back into onboarding even though the model
+        // is now ready.
+        UserDefaults.standard.set(false, forKey: Keys.forceOnboarding)
         progress = 1
         error = nil
         phase = .ready

@@ -11,19 +11,24 @@ struct OnboardingView: View {
             case 0: welcomeStep
             case 1: privacyStep
             case 2: variantStep
+            case 3: IdentityStep(step: $step)
             default: downloadStep
             }
         }
         .animation(.default, value: step)
     }
 
-    /// Onboarding step inserted between Welcome and Variant Select
-    /// (NEXT-9, 2026-04-27). Three concrete value-props + a privacy
-    /// commitment so the user understands WHY the upcoming download
-    /// is worth waiting for. Permission-priming work happens inline
-    /// when each platform feature is first used (not all at once
-    /// here — empirically that has higher grant rates than batch-
-    /// asking).
+    /// Onboarding step between Welcome and Variant Select. Three
+    /// AuADHD-audience-fit cards that set the product's tone before
+    /// the user reaches the model download. Permission-priming work
+    /// happens inline when each platform feature is first used (not
+    /// batched here — empirically higher grant rates).
+    ///
+    /// Card refresh (2026-05-13): replaced the generic "Multimodal"
+    /// and "Real memory" cards with audience-anchored framing
+    /// ("No streaks, no shame", "Two taps to skip everything").
+    /// Keeps the privacy commitment as the lead since that's the
+    /// genuine moat over cloud-based ADHD/autism apps.
     private var privacyStep: some View {
         VStack(spacing: 22) {
             Spacer()
@@ -36,17 +41,17 @@ struct OnboardingView: View {
                 onboardingFeature(
                     icon: "lock.shield.fill",
                     title: "Nothing leaves your phone",
-                    body: "Inference, memory, voice — all run on-device. Eidos can't phone home even if it wanted to."
+                    body: "Inference, memory, voice — all run on-device. EgressGuard blocks outbound network calls in code. Data brokers buy ADHD and autism diagnoses; we made sure they can't buy yours from us."
                 )
                 onboardingFeature(
-                    icon: "camera.fill",
-                    title: "Multimodal",
-                    body: "Photos, voice notes, calendar context. Gemma 4 understands all of it locally."
+                    icon: "heart.slash.fill",
+                    title: "No streaks, no shame",
+                    body: "No 'you missed N days,' no virtual pet that dies. The app is here when you reach for it and silent when you don't."
                 )
                 onboardingFeature(
-                    icon: "brain.head.profile",
-                    title: "Real memory, not session-shaped",
-                    body: "What you tell Eidos persists as Markdown files you can read, export, or delete any time."
+                    icon: "hand.tap.fill",
+                    title: "Two taps to skip everything",
+                    body: "Defaults are picked. You can change them in Settings later when you have the executive function. You don't need it now."
                 )
             }
             .padding(.horizontal, 24)
@@ -90,13 +95,25 @@ struct OnboardingView: View {
                 .foregroundStyle(.tint)
             Text("Welcome to Eidos")
                 .font(.largeTitle.bold())
-            Text("Your private, on-device AI assistant.\nNo data ever leaves your iPhone.")
+            Text("A pocket presence for the days when planning has already failed.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 24)
             Spacer()
-            Button("Get Started") { step = 1 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            VStack(spacing: 10) {
+                Button("Get Started") { step = 1 }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                // Audience design rule: never demand executive function.
+                // The Skip button lets the user reach the model download
+                // (the only un-skippable step — we need the model on
+                // disk to run anything) without reading three intro
+                // cards first. Variant defaults to E2B on iPhone.
+                Button("Skip the tour") { step = 2 }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityHint("Skips the introduction and goes straight to picking a model.")
+            }
 
             // Tester escape hatch + diagnostic — Release builds only.
             // Lets the tester force-clear all model state if anything

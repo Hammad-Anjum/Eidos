@@ -14,6 +14,10 @@ struct SettingsView: View {
     @State private var notifStatus: NotificationAuthStatus = .notDetermined
     @State private var healthGranted = false
     @State private var memoryCount = 0
+    /// Sheet presentation for the on-device session report. Lives at
+    /// the Settings root so the preview-edit-share flow is one tap
+    /// from the user's normal "configure the app" mental model.
+    @State private var showSessionReport = false
 
     var body: some View {
         NavigationStack {
@@ -21,12 +25,52 @@ struct SettingsView: View {
                 modelSection
                 proactiveSection
                 privacySection
+                shareSection
                 storageSection
                 diagnosticsSection
                 aboutSection
             }
             .navigationTitle("Settings")
             .task { await loadState() }
+            .sheet(isPresented: $showSessionReport) {
+                SessionReportPreviewView()
+                    .environment(container)
+            }
+        }
+    }
+
+    // MARK: - Share entry
+
+    /// Opens `SessionReportPreviewView` — generates a tight
+    /// professional-readable briefing on-device, lets the user edit it,
+    /// then hands it to the iOS share sheet. Distinct from the Memory
+    /// tab's Weekly Summary, which is a longer verbatim export for the
+    /// user themselves. Section copy avoids "Doctor / Therapist /
+    /// Coach" wording per the `CLAUDE.md` tonal rule — recipient is
+    /// framed as "a professional" so the user picks the audience.
+    private var shareSection: some View {
+        Section {
+            Button {
+                showSessionReport = true
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Generate session report")
+                            .foregroundStyle(.primary)
+                        Text("A short on-device briefing of the past week — themes, commitments, notable entries — for a professional.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "doc.text.fill")
+                        .foregroundStyle(.teal)
+                }
+            }
+        } header: {
+            Text("Share")
+        } footer: {
+            Text("You'll see a preview and can edit before sharing. The report is built on your iPhone — nothing is uploaded.")
+                .font(.caption2)
         }
     }
 

@@ -5,6 +5,7 @@ xcuserdata/
 *.xcuserstate
 DerivedData/
 build/
+build-catalyst/
 .build/
 *.hmap
 *.ipa

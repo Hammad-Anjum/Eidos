@@ -1,242 +1,242 @@
-# CLAUDE.md — Instructions for Claude Code working on Eidos
+# CLAUDE.md — Working rules for the Eidos AuADHD repo
 
-> **Source of truth.** Read [`masterplan.md`](./masterplan.md) before making any design decision, adding any major feature, or pivoting architecture. If this file and `masterplan.md` ever disagree, `masterplan.md` wins and this file gets updated.
-
----
-
-## On every turn, do this first
-
-1. **Check `masterplan.md` first** — specifically the "Current State" table and the active phase's goals.
-2. **If the user's ask touches a phase that's marked `DEFERRED`**, that's a signal it has upstream dependencies. Mention them before starting.
-3. **If the user's ask introduces something not in the plan**, surface that — propose whether it belongs in the current phase, a later phase, or as a v2 feature. Update `masterplan.md` when the decision is made.
-4. **Always cross-reference `KNOWN_LIMITATIONS.md`** before claiming a feature is broken — it may be a documented iOS-sandbox limit, not a bug.
-5. **Every meaningful action gets a labeled log entry.** See "Logging discipline" below.
+> **Source of truth**: [`PRODUCT.md`](./PRODUCT.md). If this file and
+> `PRODUCT.md` disagree, `PRODUCT.md` wins.
 
 ---
 
-## Logging discipline (non-negotiable)
+## On every turn
 
-This project moves fast. Every developer-facing record — design decisions, ship deliverables, test reports, bugs caught, architectural invariants — must be **labeled, dated, and concise**. A new contributor reading the logs cold should be able to reconstruct the state of the project in 10 minutes. Treat the logs the way an office worker treats a labeled file folder: clear tabs on every document, no decoration, no decoration that isn't load-bearing information.
-
-### Where things go
-
-| File | Purpose | Append cadence |
-|---|---|---|
-| `developer_log.txt` | Per-version ship record. One entry per build sent to the tester. | Every IPA shipped. |
-| `conversations/YYYY-MM-DD_<topic>.md` | Session record — decisions, dead ends, what was learned. | End of every meaningful Claude session. |
-| `history.md` | Chronological turning points only — pivots, milestones, reversals. | Only when a turning point happens. |
-| `masterplan.md` | Phase plan + Current State table. | When phase status changes or scope shifts. |
-| `KNOWN_LIMITATIONS.md` | Things that intentionally don't work or can't work (iOS sandbox limits, etc.). | When a limitation is identified. |
-| `architecture.md` | Component map + invariants. | When the architecture changes. |
-
-### Label vocabulary
-
-Every entry begins with a single bracketed label. Use them like file tabs.
-
-| Label | Meaning |
-|---|---|
-| `[SHIP]` | An artifact (IPA, ZIP, doc) was produced and delivered. |
-| `[DEV]` | Developer-side change (code, tooling, docs) not yet shipped. |
-| `[TEST]` | Test result — manual on-device, smoke, unit, benchmark. |
-| `[BUG]` | Reported defect; cite version + reproduction steps. |
-| `[FIX]` | Defect remediation; cite which `[BUG]` it closes. |
-| `[DECISION]` | Architectural or product choice that locks future work. |
-| `[INVARIANT]` | Rule that future code must respect. Don't break without an `[INVARIANT-REVISED]`. |
-| `[BLOCKER]` | Open issue blocking forward motion; cite owner + ETA if known. |
-| `[RESEARCH]` | External-fact-finding result; cite sources. |
-| `[REGRESSION]` | A previously-working feature broke. Cite the build that broke it + root cause. |
-| `[DEFERRED]` | Work explicitly postponed; cite the gating dependency. |
-
-### Format
-
-- One blank line between entries.
-- Entry header: `[LABEL] YYYY-MM-DD HH:MM — short title (under 60 chars)`.
-- Body: 1–6 lines max. If it needs more, write a separate doc and link it.
-- Cite versions with `vN` (e.g. `v12`).
-- Cite files with relative path and identifier: `Eidos/Inference/GemmaSession.swift::runGuardedGeneration`.
-- No emoji. No decorative dividers in entries (only between sections).
-- ASCII-only body text. Use `—` only when copying from a quoted source.
-
-### Example entry
-
-```
-[FIX] 2026-04-26 16:09 — v9 ships MLX cache discipline
-Closes [BUG] v8 chat crash on second Gemma call per session.
-Root cause: ModelContainer state-reuse on iPhone Metal.
-Change: GemmaSession.clearMLXCache() called between every generation
-(matches mlx-swift-lm BenchmarkHelpers practice).
-Verification pending on-device.
-```
-
-### What NOT to log
-
-- Step-by-step thinking ("I'm trying X, then Y, then Z"). Logs are decisions, not narration.
-- Files modified — git captures that. Log the *why*.
-- Generic praise or self-congratulation.
-- Tool output that git or the build system already records.
-
-### Discoverability
-
-Every log file's first line points at the next-most-relevant file. A new contributor opening `developer_log.txt` should immediately see "for architectural invariants see CLAUDE.md", "for current scope see masterplan.md", etc.
-
----
-
-## Engineering bar (non-negotiable)
-
-These apply to every line of code written, regardless of which phase is active. Codified in `masterplan.md` §8.1 but restated here for quick access.
-
-1. **Every public API has `///` doc comments.** Contributors read the file without asking.
-2. **Every error path is a typed error.** No raw `NSError`. `errorDescription` is UI-ready.
-3. **Swift 6 strict concurrency, zero warnings.** All shared state is actor-isolated, `Sendable`, or `@unchecked Sendable` with a comment explaining why.
-4. **No force-unwraps, no `try!`, no `fatalError`** in production paths. Only in `#if DEBUG` assertions.
-5. **Zero silent failures.** Every `catch { }` either logs or surfaces to the user.
-6. **Crash-safe logging.** Logger writes on a background queue; logger failure never crashes the app.
-7. **All metrics are machine-parseable.** JSONL with a stable schema.
-8. **Unit tests for every tricky piece.** `EidosTests` target stays green on every commit.
-9. **Fails-closed on safety.** Crisis / medical refusal paths are hardcoded string + regex, never reach the LLM. Unit-tested.
-10. **Feature flags, not branches.** `EidosFeatureFlags` — toggleable without rebuild.
+1. Read `PRODUCT.md` before making any design or scope decision.
+2. If the user's ask is outside the AuADHD companion flow (4 surfaces
+   — Look / Ground / Journal / What Now — plus the Inertia-default
+   prompt section), surface the scope miss before starting. The
+   submission window is bounded; resist scope creep.
+3. Cross-check `runGuardedGeneration` invariants in
+   `Eidos/Inference/GemmaSession.swift` before adding any inference path.
+4. Verify the cofounder branch (4A accessibility track) hasn't shipped
+   shared changes that conflict.
 
 ---
 
 ## Product principles
 
-Locked decisions you don't re-open without checking with the user:
-
-- **Zero egress after onboarding.** `EgressGuard` enforces this. Any new network call requires explicit approval + justification + a clear retention policy.
-- **No telemetry, no analytics, no crash reporting to third parties.** Nothing phones home, ever.
-- **On-device everything.** Inference, embeddings, STT, vision — all local. No exceptions for "just this one feature."
-- **Privacy is the moat.** Feature decisions that weaken the privacy posture get pushed back, regardless of convenience.
-- **Safety-critical paths never touch the LLM.** Crisis, medical, legal — hardcoded responses only.
-- **Swift 6, iOS 26, SwiftData, MLX Swift.** Architecture locked.
-
-## 🔥 Device-first mandate (non-negotiable)
-
-**Every code decision must respect iPhone's physical envelope.** The app must not:
-
-1. **Throttle the device.** Sustained Gemma loops → thermal → 10 %+ TPS drop. Read `ProcessInfo.thermalState` before heavy work. Honor `DeviceProfile.maxToolHops`, `DeviceProfile.contextBudgetChars`, `DeviceProfile.maxGenerationTokens`. Cap at `.serious`.
-2. **Overheat.** Bursty inference — generate fast, return to idle. No continuous loops. `.thermalCritical` aborts generation mid-stream.
-3. **Leak memory or crash.** Weak refs in `Task` closures. No retained streams. Monitor RSS via `MemoryProbe`.
-4. **Degrade accuracy over time.** Per-session crystallization + periodic memory decay keep the context fresh. Avoid unbounded memory growth in-context; retrieval should use recency + priority rankings.
-5. **Over-batch on main thread.** RAG retrieval, embedding, MD disk I/O → actors / background queues. UI is never blocked.
-
-**Before shipping any new code that runs during generation or in a loop, verify:**
-- [ ] Reads `DeviceProfile` to scale work by device class
-- [ ] Has a `MemoryProbe.snapshot(tag:)` at entry + exit (DEBUG only)
-- [ ] Respects the thermal guard (`GemmaError.thermalCritical` when appropriate)
-- [ ] Has a feature flag (`EidosFeatureFlags`) if experimental
-- [ ] Uses `async`/`await` — not `DispatchQueue.main.sync` ever
-- [ ] Unit tests cover the "cold start" + "hot state" paths
-
-**When Claude is adding new features:** default to iPhone-conservative. iPad/Mac can enjoy higher budgets; iPhone cannot. If a feature might hammer the GPU/ANE, it goes behind a feature flag, off by default on iPhone.
+- **Zero egress after onboarding.** `EgressGuard` enforces it. Any new
+  outbound call requires an explicit allowlist entry + retention-policy
+  comment. Data brokers buy ADHD / depression / autism diagnoses; the
+  user came here BECAUSE Eidos doesn't sell them out.
+- **Markdown is the source of truth.** SwiftData / FTS5 / vector indexes
+  are derived artifacts rebuilt from markdown. Memory files are the
+  auditable trail the user can read and edit.
+- **Safety-critical paths never reach the LLM.** Crisis intercept is
+  `SafetyGate`'s job — hardcoded resources, never Gemma improvisation.
+- **Companion, not coach.** Nowhere in user-visible copy do we use:
+  "Doctor", "Therapist", "Coach". No diagnostic claims. No "you should",
+  "you ought to", "you really need to." This is not a coach; it's a
+  pocket presence.
+- **Privacy is the moat**: feature decisions that weaken zero-egress get
+  pushed back regardless of convenience.
 
 ---
 
-## Naming and legal discipline
+## AuADHD-specific design rules (non-negotiable for this audience)
 
-- ❌ "Doctor" — legal minefield. Use: `Health Companion`.
-- ❌ "Therapist" — same. Use: `Reflection Partner`.
-- ❌ Clinical / prescriptive language in persona copy. No dosages, no diagnoses, no "you should take...".
-- ❌ Never present LLM output as authoritative on medical, legal, or financial matters.
-- ✅ Always include "consult a professional" disclaimers where the domain requires it.
-- ✅ Surface grounding: "Based on what you told me on [date]" / "From your USDA nutrition corpus: ...".
+These are unique to this product. The audience drops apps that demand
+the executive function they lack (54% drop within weeks, per the prior
+research turn). Every UX decision lands against this filter.
+
+1. **If a feature requires the executive function the user lacks, it's
+   wrong.** No multi-step setup. No required onboarding choices. No
+   "fill in your routine first." Defaults pick everything; advanced
+   users toggle later.
+2. **No gamification.** No streaks, no badges, no "you missed 3 days,"
+   no motivational pet, no streak-saving virtual currency. Spoons
+   explicitly rejects gamification; we follow that bar.
+3. **No pathologizing language.** Not "stuck because of ADHD" but
+   "stuck." Not "your autism is acting up" but "the day is heavy."
+   Different wiring, not disorder.
+4. **Voice-first by default.** AuDHD-prevalent traits include alexithymia
+   and brain-stops-during-typing. Voice in, speech out, eyes-free where
+   possible.
+5. **One thing, then stop.** Decision-paralysis flows return ONE
+   suggestion + a 5-minute commitment. Never lists of options. Never
+   "or alternatively." Never "if that doesn't work, you could try."
+6. **Never end with a follow-up question after grounding.** "Would you
+   like to talk about it?" defeats the purpose of grounding. End the
+   reply.
+7. **Self-identification beats inference.** The user picks their mode
+   (AuDHD / ADHD-only / autistic-only) in Settings. We do not try to
+   detect their neurotype from their behavior — that's a
+   SafetyGate-intercept territory and a trust-killer either way.
 
 ---
 
-## Current model: Gemma 4 E2B (multimodal)
+## Engineering bar (non-negotiable)
 
-- Path: `mlx-community/gemma-4-e2b-it-4bit`
-- Size on disk: ~3.58 GB after 4-bit quantization
-- Capabilities: text + image + audio input, text output, chain-of-thought
-- Context window: 128 K tokens
-- Apache 2.0 license (commercially usable)
-- Swift packaging: upgrade to `MLXVLM` in Phase 8 (currently on `MLXLLM`, text-only path)
+1. Every public API has `///` doc comments.
+2. Every error path is a typed error. No raw `NSError`.
+   `errorDescription` is UI-ready.
+3. Swift 6 strict concurrency, zero warnings. Shared state is
+   actor-isolated, `Sendable`, or `@unchecked Sendable` with a
+   justifying comment.
+4. No force-unwraps, no `try!`, no `fatalError` in production paths.
+   `#if DEBUG` assertions only.
+5. Zero silent failures. Every `catch { }` either logs or surfaces.
+6. JSONL diagnostics with a stable schema. Crash-safe (background
+   queue, never blocks UI).
+7. Feature flags, not branches: `EidosFeatureFlags`.
+8. Fails-closed on safety: `SafetyGate` is a hardcoded regex pre-LLM.
+
+---
+
+## Device-first mandate
+
+Every code path that runs during generation or in a loop must:
+
+- [ ] Read `DeviceProfile` to scale work by device class.
+- [ ] Have `MemoryProbe.snapshot(tag:)` at entry + exit (DEBUG only).
+- [ ] Respect the thermal guard (`GemmaError.thermalCritical` aborts
+      cleanly).
+- [ ] Use `async`/`await` — not `DispatchQueue.main.sync`, ever.
+- [ ] Have a feature flag if experimental.
+
+iPhone is the demo target; iPad/Mac (Designed for iPad) are dev-test
+targets with more headroom. Default conservatively on iPhone.
+
+---
+
+## Architectural invariants (do not break)
+
+- `runGuardedGeneration()` is the only entry into Gemma inference.
+  Inference lock + MLX cache clear + thermal abort + memory pre-flight
+  live there once.
+- `MLX.Memory.clearCache()` runs between every generation on iPhone.
+- Every TCC permission callback is `@Sendable`.
+- `AVAudioSession` `.record` pairs with `.measurement` mode.
+- ChatViewModel throttles streaming UI updates to ~60ms.
+- `chatLite` system prompt is ASCII-only — no markdown headers, smart
+  quotes, em-dashes, or instruction-content strings. **It is the only
+  inference path that has been verified safe on iPhone Release.** The
+  full `RAGPipeline.chat` path remains in the codebase for iPad / Mac
+  / DEBUG, but on iPhone Release `minimalChatPromptEnabled` stays ON
+  and `chatLite` carries every chat surface, including the AuADHD
+  demo flows. Do not add demo-critical behavior to the full pipeline
+  without first verifying that `chatLite` can carry it; if it has to
+  live in the full path, the demo-day flag rule has to change too
+  (and the OOM-jetsam class of bug has to be re-solved first).
+- `chatLite`'s curated tool catalogue is capped at 3 by
+  `SkillRegistry.availableSkills().prefix(3)`. The order of skill
+  construction in `AppContainer` is load-bearing: the 3 chat-path
+  tools (BreakDownScene, PickNextTask, RecallRelevantMemories) come
+  first; imperative-only tools (VoiceJournalCapture, BodyDouble —
+  dispatched directly from views) come after. Reordering this list
+  silently breaks demo surfaces.
+- `RAGPipeline.chat` runs a bounded tool loop, capped by
+  `DeviceProfile.maxToolHops` (2 on iPhone, 4 on iPad, 5 on Mac).
+  Thermal state is re-checked at every hop; `GemmaError.thermalCritical`
+  aborts the loop cleanly. The cap is what keeps prefill RAM bounded
+  on iPhone — never bump it without re-measuring the KV-cache
+  ceiling. Each tool result is bundled back into the next prompt so
+  there is no parallel fan-out.
+- **Memory writes auto-index into recall.**
+  `MemoryManager.save(_:reindex:)` fires an `onSave` closure hook
+  after the disk write + in-memory index upsert. `AppContainer.bootstrap()`
+  attaches the hook to `MemoryRecallService.indexEntry(_:)`, so every
+  skill that persists a `MemoryEntry` becomes findable via semantic
+  recall on the same turn — no per-caller `indexEntry` plumbing.
+  `touch(id:)` passes `reindex: false` because the embedding source
+  (title + body) is unchanged; re-embedding would burn Neural Engine
+  time. Do NOT add persistence paths that bypass `save()` — the hook
+  is what keeps the hero demo flow (journal → immediate recall)
+  honest. (Commit `ea48a66`.)
+- **`ContextBuilder.build(query:)` consults rule-based AND semantic
+  recall, merged.** Rule-based: P1 + activePriorities + topK hot
+  topic by recency. Semantic: `MemoryRecallService.recall` at
+  threshold 0.40 (tighter than chatLite's 0.30 because rule-based
+  already covers must-include cases). Merge preserves rule-based
+  ordering and appends semantic hits the rules missed. Without this,
+  `.recentSession` entries (fresh journal, breakdown scenes) were
+  invisible to the full chat path. `memoryRecall` is optional on
+  `ContextBuilder` so legacy / test call sites still compile; the
+  production path in `RAGPipeline.init` threads it through.
+
+---
+
+## Demo-day operational rule (cofounder-facing)
+
+**TWO flags must both be ON for the demo. Both default ON on iPhone
+Release as of the 2026-05-19 structural fix; this section documents
+*verification*, not configuration.**
+
+| Flag | Default | Why |
+|---|---|---|
+| `minimalChatPromptEnabled` | ON | Full RAG prompt builds to 10-15 K tokens and OOM-jetsams iPhone on prefill. Was the entire v9-v12 chat-crash class of bug. |
+| `curatedToolsInChatLite` | ON | Exposes the top-3 chat-path tools (BreakDownScene, PickNextTask, RecallRelevantMemories) inside `chatLite` so Look / What Now / Recall fire without leaving the safe minimal-prompt path. |
+
+For the demo build, verify both ON in Settings → Diagnostics → Flags
+before recording. If either is OFF the demo breaks — `minimalChatPromptEnabled
+OFF` crashes the app on first send, `curatedToolsInChatLite OFF`
+silently degrades Look / What Now / Recall to generic chat replies.
+
+**Historical note**: the old operational rule (pre-2026-05-19) said
+"flip `minimalChatPromptEnabled` OFF for the demo so tool calling
+works." That was wrong — it traded silent-tool-degradation for
+guaranteed-OOM-crash. The structural fix moved curated tools and the
+AuADHD essentials (grounding script, short-reply default, no-moralizing
+rule) into the `chatLite` system prompt itself, so the safe path now
+carries the demo flows. The old workaround is obsolete; do not apply
+it. See `Eidos/RAG/RAGPipeline.swift::chatLite` for the expanded
+prompt, `Eidos/App/AppContainer.swift` for the skill ordering, and
+`Eidos/Platform/Diagnostics/EidosFeatureFlags.swift::curatedToolsInChatLite`
+for the new default.
 
 ---
 
 ## Simulator vs device
 
-- **Simulator (iOS or iPhone X+):** MLX Metal crashes in CoreAudio / Metal layer. Covered by `#if targetEnvironment(simulator)` mocks in:
-  - `GemmaSession.load()` / `generate()` — canned responses
-  - `SpeechTranscriber.start()` — canned transcript
-  - `ModelDownloader.isModelDownloaded` — returns `true` to skip download screen
-- **Mac (Designed for iPad):** runs the real arm64 iOS binary on the Mac's native GPU. MLX works fully. Used for development + benchmarking.
-- **Physical iPhone:** real target. MLX + camera + mic all fully wired.
+- **Simulator (iOS)**: MLX Metal crashes. `GemmaSession.load()` /
+  `generate()` use canned mock responses. Camera / mic return empty
+  data. Useful for UI iteration only.
+- **Mac (Designed for iPad)**: real MLX runtime, full Gemma pipeline.
+  Used for development + benchmarking.
+- **Physical iPhone (15 Pro+)**: real demo target. All sensors live.
 
-When writing new code that touches MLX, audio, camera, or other hardware-dependent APIs, **always include a simulator mock path**.
-
----
-
-## Commit & code style
-
-- **Branches:** feature/`<area>-<short-name>` (`feature/diagnostics-logger`)
-- **Commits:** imperative mood, one concern per commit (`Add EidosLogger with JSONL persistence`)
-- **No mass-refactor commits.** Separate "move files" from "change behavior".
-- **PRs:** every PR links to the masterplan section it addresses.
-- **Line length:** soft 100, hard 120.
-- **Indentation:** 4 spaces in Swift (Apple-standard).
+When writing code that touches MLX, audio, camera, or other hardware
+APIs, **always include a simulator mock path**.
 
 ---
 
-## Tests
+## Commit + branch style
 
-- **`EidosTests`** target — all unit tests live here.
-- **Coverage target:** 70% overall, 95% on safety gates, persona routing, logger, memory crystallization.
-- **Run before every commit:** `⌘U` in Xcode, or `xcodebuild test -scheme Eidos -destination 'platform=iOS Simulator,name=iPhone 17'`.
-- **Benchmark corpus** (Phase 8) is not a unit test — it's a nightly / pre-release gate.
-
----
-
-## Diagnostics (dev mode)
-
-- All logs persist to `~/Documents/eidos/logs/YYYY-MM-DD.jsonl` (never rotated — keep all).
-- Settings → Diagnostics shows live log tail, metrics table, and "Run Benchmarks" button.
-- `DEBUG` builds have Diagnostics always visible; `RELEASE` builds hide it behind 5-taps-on-version-number.
+- **Branch**: `AuADHD` is the hackathon branch.
+  `medical-helper` is the previous pivot (preserved).
+  `main` is the historical Eidos product (preserved).
+- **Commits**: imperative mood, one concern per commit.
+  No mass-refactor commits — separate "move files" from "change
+  behavior".
+- **Line length**: soft 100, hard 120.
+- **Indentation**: 4 spaces in Swift.
+- **Commit messages carry the architectural rationale.** Be specific
+  about why.
 
 ---
 
-## Files Claude should read when picking up a session
+## Files Claude should read on session start
 
-If starting fresh, these are the canonical context sources in priority order:
-
-1. `masterplan.md` — phase plan, current state, design decisions
-2. `CLAUDE.md` (this file) — working rules
-3. `history.md` — chronological turning points
-4. `conversations/` — full session records for each meaningful Claude session. Read the newest first. When this session ends, write a session log here under `YYYY-MM-DD_<topic>.md`.
-5. `KNOWN_LIMITATIONS.md` — what's intentionally not supported
-6. `architecture.md` — component map
-7. `SHORTCUTS.md` — App Intent catalogue for the Shortcuts app
-8. `README.md` — public-facing overview
-9. `project.yml` — xcodegen target/dependency config
-
----
-
-## When the user pivots
-
-If the user asks for a feature or change that doesn't fit the current phase:
-
-1. Restate the ask in one sentence.
-2. Identify where it lives in the plan (existing phase / new phase / post-launch).
-3. Flag dependencies and trade-offs.
-4. Propose: "do this now (reprioritize)", "queue it for Phase N", or "ship v1 without it".
-5. If agreed, **update `masterplan.md` immediately** — don't let the plan drift.
-
----
-
-## Current active work
-
-See `masterplan.md` "Current State" table. As of 2026-04-23: **Phase 8 — Multimodal + Observability** (85% complete). Remaining: MLXVLM swap, ChatInputBar multimodal wiring, long-context packing, vision/audio rubrics, additional unit tests.
-
-Execution queue in the "Timeline Priority" section of the masterplan.
-
-Latest session record: [`conversations/2026-04-23_phase8_multimodal_observability.md`](conversations/2026-04-23_phase8_multimodal_observability.md).
+1. `PRODUCT.md` — product spec, current scope.
+2. `CLAUDE.md` (this file) — working rules.
+3. `README.md` — public-facing pitch + build instructions.
+4. `project.yml` — xcodegen target/dependency config.
+5. `Eidos/App/AppContainer.swift` — DI graph. The shape of the app is here.
+6. `Eidos/Inference/GemmaSession.swift` — `runGuardedGeneration` is the
+   only inference path; respect its invariants.
+7. `Eidos/Inference/PromptTemplates.swift` — `systemPrompt`. AuADHD
+   addendum lands here next session.
 
 ---
 
 ## End-of-session ritual
 
-Before concluding any meaningful session:
-
-1. **Update `masterplan.md`** if architecture or plan changed.
-2. **Write a session record** in `conversations/YYYY-MM-DD_<topic>.md` — decisions, open items, what's next.
-3. **Append to `history.md`** if a meaningful turning point happened (not every session warrants a history entry).
-4. **Update the Current State table** in `masterplan.md` if a phase's status changed.
+1. Update `PRODUCT.md` if scope or architecture changed.
+2. Use a clear PR description for any merge into `AuADHD` — capture the
+   *why*, not just the *what*.

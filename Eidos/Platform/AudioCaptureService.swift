@@ -145,7 +145,11 @@ final class AudioCaptureService {
         #elseif os(iOS)
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .spokenAudio, options: [.duckOthers])
+            // `.measurement` is the only mode that pairs cleanly with
+            // `.record` on iOS 26.3.1 — `.spokenAudio` returns OSStatus
+            // -50 (paramErr) when starting the engine on some devices.
+            // Mirrors the SpeechTranscriber convention in this codebase.
+            try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             throw AudioCaptureError.sessionFailed(error)

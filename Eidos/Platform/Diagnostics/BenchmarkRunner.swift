@@ -232,6 +232,13 @@ final class BenchmarkRunner {
             return (BenchmarkFixtures.sceneImage.map { [$0] } ?? [], nil)
         case "audio.transcribe.basic":
             return ([], BenchmarkFixtures.syntheticPCM)
+        // AuADHD vision-tool fixtures: reuse the synthetic scene image
+        // so the Day-1 reliability gate exercises the vision path. Any
+        // new `auADHD` prompt with `needsImage: true` must be added here
+        // — falling through to the default returns no image and the
+        // benchmark result is meaningless.
+        case "auadhd.scene.tool":
+            return (BenchmarkFixtures.sceneImage.map { [$0] } ?? [], nil)
         default:
             return ([], nil)
         }

@@ -4,8 +4,6 @@ enum AppTab: Hashable {
     case home
     case chat
     case memory
-    case knowledgeBase
-    case ingest
     case settings
 }
 
@@ -33,14 +31,6 @@ struct RootView: View {
             MemoryBrowserView()
                 .tabItem { Label("Memory", systemImage: "brain") }
                 .tag(AppTab.memory)
-
-            KBBrowserView()
-                .tabItem { Label("Knowledge", systemImage: "books.vertical") }
-                .tag(AppTab.knowledgeBase)
-
-            IngestView()
-                .tabItem { Label("Ingest", systemImage: "tray.and.arrow.down") }
-                .tag(AppTab.ingest)
 
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gear") }

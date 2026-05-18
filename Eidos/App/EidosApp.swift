@@ -5,6 +5,13 @@ import MLX
 @main
 struct EidosApp: App {
 
+    /// UIKit AppDelegate bridge. Carries no app logic — just hooks
+    /// `applicationWillResignActive` to post `.eidosWillResignActive`
+    /// on the synchronous UIKit thread, so the privacy-snapshot
+    /// overlay can flip ON before iOS captures the app-switcher
+    /// thumbnail. See `EidosAppDelegate.swift`.
+    @UIApplicationDelegateAdaptor(EidosAppDelegate.self) private var appDelegate
+
     @State private var container: AppContainer?
     @State private var initError: String?
     /// Drives the FaceID / passcode lock. Owned at app level so it
@@ -152,7 +159,13 @@ struct EidosApp: App {
                     // .active is the only state where chat / memory is
                     // actually being looked at by the user. .inactive
                     // and .background both happen mid-snapshot, so we
-                    // hide content for both.
+                    // hide content for both. scenePhase is the
+                    // authoritative source — the AppDelegate
+                    // notifications below are an EARLIER signal but
+                    // not strictly required (e.g. simulator may not
+                    // fire them consistently). Idempotent: if
+                    // .eidosWillResignActive already set isObscured,
+                    // this reassignment to the same value is a no-op.
                     isObscured = (newPhase != .active)
                     // Foreground crossing: re-evaluate whether the lock
                     // should re-engage (>5 min backgrounded).
@@ -164,6 +177,23 @@ struct EidosApp: App {
                     if oldPhase == .active && newPhase != .active {
                         lock.handleBackgroundTransition()
                     }
+                }
+                // Earlier signal than `scenePhase`: the UIKit
+                // AppDelegate posts these notifications synchronously
+                // from `applicationWillResignActive` /
+                // `applicationDidBecomeActive`. Flips the privacy
+                // overlay one runloop turn before SwiftUI's
+                // scenePhase transition lands — closing the race
+                // between our overlay render and iOS's app-switcher
+                // snapshot on slower devices. Both signals converge
+                // on the same `isObscured` state; whichever fires
+                // first sets it, the other is a no-op same-value
+                // reassignment.
+                .onReceive(NotificationCenter.default.publisher(for: .eidosWillResignActive)) { _ in
+                    isObscured = true
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .eidosDidBecomeActive)) { _ in
+                    isObscured = false
                 }
                 .fullScreenCover(isPresented: Binding(
                     get: { lock.isLocked },
@@ -193,7 +223,6 @@ struct EidosApp: App {
                     case "chat": .chat
                     case "home": .home
                     case "memory": .memory
-                    case "knowledge": .knowledgeBase
                     case "settings": .settings
                     default: .home
                     }

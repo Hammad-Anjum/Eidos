@@ -673,7 +673,9 @@ private struct DiagnosticsMessageBubble: View {
 // MARK: - Flags pane
 
 private struct FlagsPane: View {
+    @Environment(AppContainer.self) private var container
     @Bindable var flags = EidosFeatureFlags.shared
+    @State private var onboardingReset: Bool = false
 
     var body: some View {
         Form {
@@ -683,7 +685,7 @@ private struct FlagsPane: View {
                 Toggle("Audio via Gemma (bypass Speech)", isOn: $flags.audioViaGemmaEnabled)
                 Toggle("Reasoning / chain-of-thought", isOn: $flags.reasoningEnabled)
                 Toggle("Long-context memory packing", isOn: $flags.longContextPackingEnabled)
-                Toggle("Personas (Phase 9)", isOn: $flags.personasEnabled)
+                Toggle("Speak replies aloud", isOn: $flags.speakRepliesEnabled)
             }
             Section {
                 Toggle("Minimal chat prompt", isOn: $flags.minimalChatPromptEnabled)
@@ -704,6 +706,30 @@ private struct FlagsPane: View {
                     : "Safety gate is always ON in release builds.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                Button("Re-run onboarding") {
+                    // Set the override so the next bootstrap check routes
+                    // back through OnboardingView, then immediately clear
+                    // the downloaded-model state so the @Observable phase
+                    // transitions to .idle and EidosApp's body re-renders
+                    // OnboardingView without waiting for an app restart.
+                    UserDefaults.standard.set(true, forKey: "EidosForceOnboarding")
+                    container.modelDownloader.clearDownloadedModelState()
+                    onboardingReset = true
+                }
+                .foregroundStyle(.orange)
+                if onboardingReset {
+                    Text("Onboarding will start on the next app render. The override clears automatically once you finish the download step.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Onboarding")
+            } footer: {
+                Text("Routes the next render back through OnboardingView. Useful for testing tone, audience cards, and IdentityStep without flashing a device. On simulator, the model download step finishes immediately because MLX is mocked.")
+                    .font(.caption2)
+            }
+
             Section {
                 Button("Reset all flags to defaults") { flags.resetAll() }
                     .foregroundStyle(.orange)

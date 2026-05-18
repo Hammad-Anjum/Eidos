@@ -14,6 +14,11 @@ enum BenchmarkCategory: String, Sendable, Codable, CaseIterable {
     case visionOCR
     case visionScene
     case audioTranscription
+    /// AuADHD-surface tool-call reliability tests. This is the
+    /// hackathon's gating category — `auadhd.scene.tool` is the
+    /// Day-1 critical reliability sweep per NEXT_PHASES.md
+    /// (pass threshold ≥ 85% across 20 iterations).
+    case auADHD
 
     /// Human-readable label for the Diagnostics UI.
     var displayLabel: String {
@@ -29,6 +34,7 @@ enum BenchmarkCategory: String, Sendable, Codable, CaseIterable {
         case .visionOCR: "Vision — OCR"
         case .visionScene: "Vision — scene"
         case .audioTranscription: "Audio — transcription"
+        case .auADHD: "AuADHD — surface tool-calls"
         }
     }
 }
@@ -93,6 +99,7 @@ enum BenchmarkCorpus {
         prompts.append(contentsOf: visionOCR)
         prompts.append(contentsOf: visionScene)
         prompts.append(contentsOf: audioTranscription)
+        prompts.append(contentsOf: auADHD)
         return prompts
     }()
 
@@ -297,6 +304,128 @@ enum BenchmarkCorpus {
               expectedMaxSeconds: 30
         ) { out in
             (out.count > 4 ? 0.6 : 0, "Returned \(out.count) chars (runner should supply expected transcript)")
+        },
+    ]
+
+    /// AuADHD reliability fixtures (Phase 1 critical-path test +
+    /// Phase 4 polish sweep).
+    ///
+    /// Run each fixture ~20 iterations on iPhone 15 Pro+ (with
+    /// `minimalChatPromptEnabled` OFF) or Mac Designed-for-iPad.
+    /// Pass threshold per skill: ≥ 85% of iterations score 1.0.
+    /// If `auadhd.scene.tool` fails the threshold on Day 1, halt
+    /// feature work and retune the prompt addendum (see
+    /// `NEXT_PHASES.md` for the fallback decision matrix).
+    static let auADHD: [BenchmarkPrompt] = [
+        // Surface 1: Break Down My Mess — the hero.
+        // Vision + tool call. The Day-1 critical reliability gate.
+        .init(id: "auadhd.scene.tool", category: .auADHD,
+              prompt: "I'm looking at this and I don't know where to start.",
+              needsImage: true,
+              expectedMaxSeconds: 30
+        ) { out in
+            let lower = out.lowercased()
+            let hasTool = lower.contains("break_down_scene")
+            let hasFirst = lower.contains("\"first_action\"")
+            let hasNext = lower.contains("\"next_two_steps\"")
+            let fieldHits = [hasFirst, hasNext].filter { $0 }.count
+            if hasTool && fieldHits == 2 {
+                return (1.0, "Tool call emitted with both schema fields")
+            }
+            if hasTool && fieldHits == 1 {
+                return (0.5, "Tool name present but schema fields incomplete")
+            }
+            if hasTool {
+                return (0.3, "Tool name only, no schema fields")
+            }
+            return (0.0, "No tool call emitted; raw narration only")
+        },
+
+        // Surface 5: What Now — decision paralysis.
+        // Tool call against memory + calendar; expect energy_level
+        // emitted by the model (or asked back as a clarifying turn).
+        .init(id: "auadhd.whatnow.tool", category: .auADHD,
+              prompt: "I have eleven things on my list and my brain just stopped.",
+              expectedMaxSeconds: 30
+        ) { out in
+            let lower = out.lowercased()
+            let hasTool = lower.contains("pick_next_task")
+            let hasEnergy = lower.contains("\"energy_level\"")
+            // Accept either: an immediate tool call with energy_level,
+            // OR a clarifying question that asks for energy 0-4.
+            let asksEnergy = lower.contains("energy") &&
+                (lower.contains("0") || lower.contains("zero")) &&
+                (lower.contains("4") || lower.contains("four"))
+            if hasTool && hasEnergy {
+                return (1.0, "Tool call with energy_level field")
+            }
+            if hasTool {
+                return (0.7, "Tool call but missing energy_level field")
+            }
+            if asksEnergy {
+                return (0.6, "Asked clarifying energy question (acceptable)")
+            }
+            return (0.0, "Neither tool call nor energy clarification")
+        },
+
+        // Surface 2b: Memory recall — chat tool.
+        // Triggered by "told you before" phrasing; expect
+        // `recall_relevant_memories` with the user's terms as query.
+        .init(id: "auadhd.recall.tool", category: .auADHD,
+              prompt: "What did I tell you about Maya last week?",
+              expectedMaxSeconds: 25
+        ) { out in
+            let lower = out.lowercased()
+            let hasTool = lower.contains("recall_relevant_memories")
+            let hasQuery = lower.contains("\"query\"")
+            let mentionsMaya = lower.contains("maya")
+            if hasTool && hasQuery && mentionsMaya {
+                return (1.0, "Tool call with query containing 'Maya'")
+            }
+            if hasTool && hasQuery {
+                return (0.7, "Tool call but query doesn't echo the user's term")
+            }
+            if hasTool {
+                return (0.4, "Tool name only")
+            }
+            return (0.0, "No tool call emitted")
+        },
+
+        // Surface 3: Grounding — prompt section, NOT a tool call.
+        // We expect grounding-script content, NOT a JSON tool call.
+        .init(id: "auadhd.ground.prompt", category: .auADHD,
+              prompt: "I just got chewed out by my boss and I want to quit.",
+              expectedMaxSeconds: 25
+        ) { out in
+            let lower = out.lowercased()
+            // Negative signals: tool call (wrong path) or
+            // problem-solving language.
+            let calledTool = lower.contains("\"tool\"")
+            let askedFollowup = lower.contains("would you like to talk")
+                || lower.contains("want to talk about it")
+                || lower.contains("tell me more")
+            if calledTool {
+                return (0.0, "Wrongly emitted a tool call instead of grounding script")
+            }
+            if askedFollowup {
+                return (0.3, "Asked a follow-up question after grounding (prohibited)")
+            }
+            // Positive signals: 5-4-3-2-1 sensory cue + breath cue +
+            // physical action.
+            let hasSensory = lower.contains("see") || lower.contains("hear")
+                || lower.contains("notice") || lower.contains("5-4-3-2-1")
+                || lower.contains("five things")
+            let hasBreath = lower.contains("breath") || lower.contains("breathe")
+                || lower.contains("inhale") || lower.contains("exhale")
+            let hasAction = lower.contains("stand") || lower.contains("walk")
+                || lower.contains("window") || lower.contains("touch")
+            let hits = [hasSensory, hasBreath, hasAction].filter { $0 }.count
+            switch hits {
+            case 3: return (1.0, "Full grounding script: sensory + breath + action")
+            case 2: return (0.7, "Partial grounding script (2/3 elements)")
+            case 1: return (0.4, "Only 1/3 grounding elements present")
+            default: return (0.0, "No grounding elements detected")
+            }
         },
     ]
 }
