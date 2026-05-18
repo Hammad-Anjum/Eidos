@@ -10,12 +10,16 @@ import MLXVLM
 import MLXHuggingFace
 import HuggingFace
 import Tokenizers
+#if canImport(UIKit)
+import UIKit
+#endif
 
 enum GemmaError: Error, LocalizedError {
     case notLoaded
     case filesMissing(String)
     case thermalCritical
     case memoryConstrained(availableMB: Int)
+    case appBackgrounded
 
     var errorDescription: String? {
         switch self {
@@ -24,6 +28,8 @@ enum GemmaError: Error, LocalizedError {
         case .thermalCritical: "Device too hot for inference. Let it cool down."
         case .memoryConstrained(let mb):
             "Not enough free memory (\(mb) MB available). Close some apps and try again."
+        case .appBackgrounded:
+            "Eidos paused because it's running in the background. Bring the app back to the foreground to continue."
         }
     }
 }
@@ -73,6 +79,40 @@ actor GemmaSession {
             next.resume()
         } else {
             isInferenceBusy = false
+        }
+    }
+
+    /// True when GPU command-buffer submission is permitted by the
+    /// current app lifecycle state. Metal rejects buffers submitted
+    /// while the iOS app is `.background` with
+    /// `kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted`,
+    /// which MLX surfaces as an uncaught `std::runtime_error` that
+    /// crashes the process (the Swift runtime cannot catch C++
+    /// exceptions across the FFI boundary). The fix is to detect the
+    /// state ourselves before MLX submits the next buffer and abort
+    /// the stream cleanly with a typed Swift error.
+    ///
+    /// `.inactive` (Face ID prompt up, Control Center pulled down,
+    /// incoming-call banner) is still foreground from Metal's GPU
+    /// perspective — only `.background` triggers the rejection. So
+    /// the predicate is `!= .background`, not `== .active`. Using
+    /// `== .active` would over-block during the applock Face ID
+    /// dialog and refuse legitimate generations.
+    ///
+    /// Mac, Mac Catalyst, and simulator don't have the background-GPU
+    /// restriction; this returns `true` unconditionally there.
+    nonisolated static func isAppForegroundOK() async -> Bool {
+        switch DeviceProfile.formFactor {
+        case .mac, .simulator:
+            return true
+        case .iPhone, .iPad:
+            #if canImport(UIKit)
+            return await MainActor.run {
+                UIApplication.shared.applicationState != .background
+            }
+            #else
+            return true
+            #endif
         }
     }
 
@@ -349,6 +389,21 @@ actor GemmaSession {
             throw GemmaError.memoryConstrained(availableMB: availableMB)
         }
 
+        // Pre-flight background check. Refuse to start a generation
+        // when the app is currently in `.background` — Metal will
+        // reject the first command buffer with kIOGPU... and MLX
+        // will translate that into an uncaught C++ exception that
+        // SIGKILLs the process. Throwing here gives the UI a clean
+        // error to render instead. The companion mid-stream check
+        // inside `wrapMLXStream` handles transitions that happen
+        // after generation has started.
+        guard await Self.isAppForegroundOK() else {
+            EidosLogger.shared.log(.warn, category: .model,
+                event: "generate.\(kind).backgrounded-abort",
+                failure: .modelGenerate)
+            throw GemmaError.appBackgrounded
+        }
+
         await acquireInferenceLock()
         EidosLogger.shared.log(.info, category: .model,
             event: "generate.\(kind).lock-acquired",
@@ -450,6 +505,26 @@ actor GemmaSession {
                                 event: "generate.\(kind).stream.thermal-abort",
                                 failure: .modelThermal)
                             continuation.finish(throwing: GemmaError.thermalCritical)
+                            await release()
+                            releasedLock = true
+                            return
+                        }
+                        // Same shape as the thermal guard above. If the
+                        // app moved to `.background` between this chunk
+                        // and the next, the upcoming Metal command-buffer
+                        // submission would be rejected with kIOGPU... and
+                        // MLX would throw an uncaught C++ exception that
+                        // SIGKILLs the process. We can't catch that across
+                        // the FFI boundary, so we must abort *before* the
+                        // next iteration submits work. There remains a
+                        // race window if the app backgrounds between this
+                        // check and the next MLX submission, but it's
+                        // bounded by chunk cadence (~50-200 ms).
+                        if !(await Self.isAppForegroundOK()) {
+                            EidosLogger.shared.log(.warn, category: .model,
+                                event: "generate.\(kind).stream.backgrounded-abort",
+                                failure: .modelGenerate)
+                            continuation.finish(throwing: GemmaError.appBackgrounded)
                             await release()
                             releasedLock = true
                             return
