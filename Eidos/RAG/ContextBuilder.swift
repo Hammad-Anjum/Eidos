@@ -53,6 +53,27 @@ struct ContextBuilder {
 
     let memoryManager: MemoryManager
     let knowledgeRepo: KnowledgeRepository
+    /// Optional semantic-recall pass. When present, `build(query:)` runs
+    /// an embedding search in parallel with the rule-based selection
+    /// and merges any high-confidence hits the rule-based pass would
+    /// have missed (e.g. fresh `.recentSession` journal entries that
+    /// match the query but don't live in P1 / activePriorities / hot
+    /// topic). Optional so the legacy memberwise init still works in
+    /// tests that don't wire recall.
+    let memoryRecall: MemoryRecallService?
+
+    /// Explicit init so `memoryRecall` defaults to nil for callers that
+    /// don't wire semantic recall (older tests, ChatLite fixtures). The
+    /// production path in `RAGPipeline.init` passes the live service.
+    init(
+        memoryManager: MemoryManager,
+        knowledgeRepo: KnowledgeRepository,
+        memoryRecall: MemoryRecallService? = nil
+    ) {
+        self.memoryManager = memoryManager
+        self.knowledgeRepo = knowledgeRepo
+        self.memoryRecall = memoryRecall
+    }
 
     // MARK: - Public
 
@@ -61,7 +82,28 @@ struct ContextBuilder {
     /// decay.
     func build(query: String, maxChars: Int? = nil) async -> Result {
         let effectiveMax = maxChars ?? Self.resolvedMaxChars()
-        let memoryEntries = await gatherMemory()
+        let ruleBased = await gatherMemory()
+
+        // Semantic-recall pass — finds memories whose *content* matches
+        // the query, not just whose priority/tier would have selected
+        // them. Crucial for the hero demo flow: a freshly-saved journal
+        // entry lives in `.recentSession` (not P1, not activePriorities,
+        // not hot-topic), so the rule-based pass alone never surfaces
+        // it. Threshold 0.40 is tighter than chatLite's 0.30 — the
+        // rule-based set already covers the must-include cases, so the
+        // recall pass should add relevance, not noise.
+        let memoryEntries: [MemoryEntry] = await {
+            guard let recall = memoryRecall else { return ruleBased }
+            let hits = await recall.recall(query: query, topK: 10, minScore: 0.40)
+            guard !hits.isEmpty else { return ruleBased }
+            var seen: Set<UUID> = Set(ruleBased.map(\.id))
+            var merged = ruleBased
+            for hit in hits where !seen.contains(hit.entry.id) {
+                merged.append(hit.entry)
+                seen.insert(hit.entry.id)
+            }
+            return merged
+        }()
         // KB topK scales with the packing flag — 5 for conservative,
         // 10 when we have the context to absorb it.
         let kbTopK = EidosFeatureFlags.shared.longContextPackingEnabled ? 10 : 5

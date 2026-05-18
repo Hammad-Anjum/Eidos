@@ -24,7 +24,6 @@ final class EidosFeatureFlags {
         case visionEnabled = "eidos.flag.vision"
         case audioEnabled = "eidos.flag.audio"
         case reasoningEnabled = "eidos.flag.reasoning"
-        case personasEnabled = "eidos.flag.personas"
         case diagnosticsUIEnabled = "eidos.flag.diagnosticsUI"
         case longContextPackingEnabled = "eidos.flag.longContext"
         case safetyGateEnabled = "eidos.flag.safetyGate"
@@ -32,17 +31,33 @@ final class EidosFeatureFlags {
         case minimalChatPromptEnabled = "eidos.flag.minimalChatPrompt"
         case appLockEnabled = "eidos.flag.appLock"
         case curatedToolsInChatLite = "eidos.flag.curatedToolsInChatLite"
+        // AuADHD-companion flags (added 2026-05-12 with the pivot).
+        // `medModeEnabled` removed; AuADHD-mode flags land next
+        // session (audhdMode enum + inertiaDefaultEnabled).
+        case speakRepliesEnabled = "eidos.flag.speakReplies"
     }
 
-    /// Allows `chatLite` to expose a curated 3-tool catalogue
-    /// (Reminders, Calendar, Contacts) to Gemma. When OFF, chatLite
-    /// is a stateless conversational mode with no tool access. When
-    /// ON, Gemma can emit JSON tool calls that get dispatched via
-    /// `SkillRegistry`. Defaults OFF so users opt in once they trust
-    /// stability — but the architecture is ready.
+    /// Allows `chatLite` to expose a curated 3-tool catalogue to Gemma.
+    /// When OFF, chatLite is a stateless conversational mode with no
+    /// tool access. When ON, Gemma can emit JSON tool calls that get
+    /// dispatched via `SkillRegistry`.
+    ///
+    /// **Forced ON on iPhone hardware — any build config, not user-
+    /// toggleable.** The companion flag `minimalChatPromptEnabled` is
+    /// also forced ON on iPhone; without curated tools in that path,
+    /// Look / What Now / Recall would silently degrade to generic
+    /// chat replies. The gate is hardware, not Release: Debug builds
+    /// hit the same RAM ceiling. To exercise the full pipeline, run
+    /// on Mac Catalyst, iPad, or the simulator.
     var curatedToolsInChatLite: Bool {
-        get { bool(.curatedToolsInChatLite, default: false) }
-        set { set(.curatedToolsInChatLite, newValue) }
+        get {
+            if DeviceProfile.formFactor == .iPhone { return true }
+            return bool(.curatedToolsInChatLite, default: false)
+        }
+        set {
+            if DeviceProfile.formFactor == .iPhone { return }
+            set(.curatedToolsInChatLite, newValue)
+        }
     }
 
     /// Biometric / passcode gate at app launch and after >5 min
@@ -85,10 +100,14 @@ final class EidosFeatureFlags {
         set { set(.reasoningEnabled, newValue) }
     }
 
-    /// Persona / skills system (Phase 9). Off until Phase 9 lands.
-    var personasEnabled: Bool {
-        get { bool(.personasEnabled, default: false) }
-        set { set(.personasEnabled, newValue) }
+    /// Speak chat replies aloud via `AVSpeechSynthesizer`. Wired into
+    /// `ChatViewModel.send()` final-flush hook. Carried over from the
+    /// medical-helper branch — equally relevant for AuADHD where the
+    /// audience explicitly wants voice-first / eyes-free flows.
+    /// Default may flip ON for AuADHD next session.
+    var speakRepliesEnabled: Bool {
+        get { bool(.speakRepliesEnabled, default: false) }
+        set { set(.speakRepliesEnabled, newValue) }
     }
 
     /// Settings → Diagnostics sub-panel visibility. Always on in DEBUG,
@@ -114,27 +133,33 @@ final class EidosFeatureFlags {
     }
 
     /// Use a slim system prompt + bypass RAG/ambient/tools/history when
-    /// running a chat turn. **Default ON in iPhone RELEASE** to keep the
-    /// prefill KV cache inside Metal's heap budget — the full prompt
-    /// (system identity + RAG context + ambient + tool schemas + history)
-    /// can hit 10–15 K tokens, which spikes the GPU buffer past the
-    /// foreground-app ceiling on iPhone and gets the process reaped by the
-    /// kernel before Gemma emits a single token. Briefing path is
-    /// unaffected — it builds its own slim prompt.
+    /// running a chat turn. **Forced ON on iPhone hardware — any build
+    /// config, not user-toggleable.** The full prompt (system identity
+    /// + RAG context + ambient + tool schemas + history) reaches
+    /// 10-15 K tokens, which spikes the Metal heap past the foreground-
+    /// app ceiling on iPhone and gets the process reaped before Gemma
+    /// emits a single token (the v9-v12 chat-crash class of bug). The
+    /// OOM-jetsam is a hardware ceiling, not a Release-build behavior
+    /// — Debug builds on iPhone hit the same RAM limit, so the
+    /// hardware check is the right gate. chatLite is the only
+    /// inference path verified safe on iPhone per CLAUDE.md, so this
+    /// is a hard invariant rather than a flag. The getter ignores any
+    /// persisted UserDefaults value on iPhone; the setter no-ops. To
+    /// exercise the full pipeline, build for Mac Catalyst, iPad, or
+    /// the simulator — those targets have RAM + thermal headroom.
+    /// Briefing path is unaffected; it builds its own slim prompt.
     ///
     /// When ON: chat builds `[system: short-id, user: text]` only.
-    /// When OFF (Mac, iPad, DEBUG): full RAG/tool pipeline as before.
+    /// When OFF (Mac, iPad, simulator): full RAG/tool pipeline.
     var minimalChatPromptEnabled: Bool {
         get {
-            // RELEASE on iPhone defaults ON; everywhere else defaults OFF.
-            #if DEBUG
-            let def = false
-            #else
-            let def: Bool = (DeviceProfile.formFactor == .iPhone)
-            #endif
-            return bool(.minimalChatPromptEnabled, default: def)
+            if DeviceProfile.formFactor == .iPhone { return true }
+            return bool(.minimalChatPromptEnabled, default: false)
         }
-        set { set(.minimalChatPromptEnabled, newValue) }
+        set {
+            if DeviceProfile.formFactor == .iPhone { return }
+            set(.minimalChatPromptEnabled, newValue)
+        }
     }
 
     /// Hardcoded pre-LLM safety refusal for crisis / medical / legal.
@@ -187,7 +212,6 @@ final class EidosFeatureFlags {
             Key.visionEnabled,
             .audioEnabled,
             .reasoningEnabled,
-            .personasEnabled,
             .diagnosticsUIEnabled,
             .longContextPackingEnabled,
             .safetyGateEnabled,
@@ -195,6 +219,7 @@ final class EidosFeatureFlags {
             .minimalChatPromptEnabled,
             .appLockEnabled,
             .curatedToolsInChatLite,
+            .speakRepliesEnabled,
         ] {
             UserDefaults.standard.removeObject(forKey: key.rawValue)
         }

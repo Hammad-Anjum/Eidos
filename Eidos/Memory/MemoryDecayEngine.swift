@@ -61,21 +61,39 @@ actor MemoryDecayEngine {
                 continue
             }
 
-            switch record.priority {
-            case .p1:
-                continue  // never touched
-            case .p2:
-                try await demote(record, to: .p3)
-                report.demoted.append(record.id)
-            case .p3:
-                try await demote(record, to: .p4)
-                report.demoted.append(record.id)
-            case .p4:
-                try await archive(record)
-                report.archived.append(record.id)
-            case .p5:
-                try await manager.delete(id: record.id)
-                report.evicted.append(record.id)
+            // Per-record do/catch so one broken entry doesn't kill the
+            // whole pass. The previous shape let any throw out of
+            // `demote` / `archive` / `delete` propagate up through
+            // `runOnce`, aborting the remaining records mid-loop —
+            // worst case, a single corrupt markdown file would stall
+            // decay indefinitely until the user found and fixed it.
+            do {
+                switch record.priority {
+                case .p1:
+                    continue  // never touched
+                case .p2:
+                    try await demote(record, to: .p3)
+                    report.demoted.append(record.id)
+                case .p3:
+                    try await demote(record, to: .p4)
+                    report.demoted.append(record.id)
+                case .p4:
+                    try await archive(record)
+                    report.archived.append(record.id)
+                case .p5:
+                    try await manager.delete(id: record.id)
+                    report.evicted.append(record.id)
+                }
+            } catch {
+                EidosLogger.shared.log(.warn, category: .memory,
+                    event: "memory.decay.record.failed",
+                    message: error.localizedDescription,
+                    payload: [
+                        "entry_id": record.id.uuidString,
+                        "priority": record.priority.rawValue,
+                    ]
+                )
+                // Continue with remaining records.
             }
         }
 
@@ -154,6 +172,14 @@ actor MemoryDecayEngine {
     /// Moves a record to `.archive` and demotes its priority one step.
     /// Archived entries don't participate in hot-path retrieval but are
     /// still searchable via the knowledge base.
+    ///
+    /// The tier move and the priority demotion are kept on either side
+    /// of a single `manager.save` so the on-disk state is never seen
+    /// as "archived but still P4". `manager.move` updates the markdown
+    /// location; the subsequent save persists the priority change. If
+    /// the process is killed between the two, the next decay pass
+    /// re-enters this method (the early `if record.tier != .archive`
+    /// no-ops the move) and finishes the priority bump — idempotent.
     private func archive(_ record: MemoryIndexRecord) async throws {
         if record.tier != .archive {
             try await manager.move(id: record.id, to: .archive)

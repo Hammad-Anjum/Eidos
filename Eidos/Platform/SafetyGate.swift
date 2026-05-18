@@ -98,10 +98,21 @@ enum SafetyGate {
 
     // MARK: - Normalization
 
-    /// Lowercases and strips excess whitespace. Leaves punctuation so
-    /// regex anchors still work.
+    /// Lowercases, strips diacritics, and trims whitespace. Leaves
+    /// punctuation so regex anchors still work.
+    ///
+    /// Diacritic stripping closes a Unicode-bypass class: a user
+    /// typing "suïcide" or "suicidé" (accented characters from autocorrect
+    /// in some locales, or copy-pasted from a Romance-language source)
+    /// would not have matched the bare `\bsuicid(e|al)\b` pattern. We
+    /// strip combining diacritics so the regex sees the unaccented
+    /// Latin form. Non-Latin scripts (Arabic, CJK) pass through
+    /// unchanged — our crisis patterns are English-language only by
+    /// design, and the gate falls back to the LLM for everything else
+    /// after passing through.
     static func normalize(_ s: String) -> String {
-        s.lowercased()
+        let stripped = s.applyingTransform(.stripDiacritics, reverse: false) ?? s
+        return stripped.lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

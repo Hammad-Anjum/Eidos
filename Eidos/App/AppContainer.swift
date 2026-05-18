@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import MLX
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -7,6 +8,24 @@ import UIKit
 import AVFAudio
 #endif
 
+/// Dependency-injection root for Eidos AuADHD companion.
+///
+/// Pivoted from medical-helper to AuADHD (2026-05-12). Existing
+/// cleanup carried over from the medical-helper branch (digest,
+/// ingestion, Motion / Music sources, LiveActivityManager,
+/// AppActionRegistry, communication skills already gone).
+///
+/// Next session lands four AuADHD-shaped tools against the
+/// `SkillRegistry`:
+///   - `BreakDownSceneSkill` (vision → spoken 3-step plan)
+///   - `VoiceJournalCaptureSkill` (mic → crystallized journal entries)
+///   - `RecallRelevantMemoriesSkill` (chat tool, embedding search)
+///   - `PickNextTaskSkill` (calendar + memory + energy → 1 task)
+///
+/// Kept: Gemma + MLX, embedding + vector substrate, knowledge repository,
+/// memory system + decay + crystallizer + recall, RAG pipeline, Calendar
+/// / Contacts / Health / Location sources, vision + audio + speech
+/// capture, notification scheduler, model downloader, benchmark runner.
 @MainActor
 @Observable
 final class AppContainer {
@@ -21,30 +40,28 @@ final class AppContainer {
     let knowledgeRepo: KnowledgeRepository
     let skillRegistry: SkillRegistry
     let ragPipeline: RAGPipeline
-    let digestGenerator: DigestGenerator
-    let ingestionCoordinator: IngestionCoordinator
     let modelDownloader: ModelDownloader
     let memoryManager: MemoryManager
-    /// Embedding-based semantic recall over the memory store. Built
-    /// in NEXT-1 (2026-04-27). Bridges EmbeddingService + VectorStore
-    /// + MemoryManager so chat turns can find memories by meaning,
-    /// not just keyword.
+    /// Embedding-based semantic recall over the memory store. Bridges
+    /// EmbeddingService + VectorStore + MemoryManager so chat turns can
+    /// find memories by meaning, not just keyword. After this is
+    /// constructed, every newly-crystallized memory is auto-indexed.
     let memoryRecall: MemoryRecallService
     let memoryDecayEngine: MemoryDecayEngine
     let memoryCrystallizer: MemoryCrystallizer
-    let appActionRegistry: AppActionRegistry
     let healthSource: HealthSource
     let notificationScheduler: NotificationScheduler
-    let proactiveDigestGenerator: ProactiveDigestGenerator
     let locationSource: LocationSource
-    let motionSource: MotionSource
-    let liveActivityManager: LiveActivityManager
     let benchmarkRunner: BenchmarkRunner
     let audioCaptureService: AudioCaptureService
     let visionCaptureService: VisionCaptureService
-    let musicSource: MusicSource
     let ambientSnapshotAssembler: AmbientSnapshotAssembler
     var isBootstrapped = false
+
+    /// One-shot chat launch intent. Home tiles set this when the user
+    /// taps Look / Ground / What Now; `ChatView` consumes it on the
+    /// next render and clears it. See `ChatLaunchIntent` for fields.
+    var pendingChatLaunch: ChatLaunchIntent?
 
     init() throws {
         let schema = Schema([
@@ -52,7 +69,6 @@ final class AppContainer {
             EmbeddingRecord.self,
             Conversation.self,
             ConversationMessage.self,
-            IngestionLog.self,
         ])
 
         let config = ModelConfiguration(
@@ -76,30 +92,51 @@ final class AppContainer {
         )
 
         let memoryManager = MemoryManager()
-        let digestGenerator = DigestGenerator(
-            calendarSource: calendarSource,
-            knowledgeRepo: knowledgeRepo,
-            memoryManager: memoryManager,
-            gemma: gemma
+
+        // Build `memoryRecall` here (rather than lower in this init)
+        // so we can pass it to `RecallRelevantMemoriesSkill`. The
+        // service is cheap to construct — the vector index is
+        // populated lazily on first use.
+        let memoryRecall = MemoryRecallService(
+            embedding: embeddingService,
+            vectorStore: vectorStore,
+            manager: memoryManager
         )
 
-        let appActionRegistry = AppActionRegistry()
-
+        // AuADHD skills (Phase 2, 2026-05-12). The system prompt's
+        // AuADHD addendum (in `PromptTemplates.systemPrompt`)
+        // instructs Gemma when to call each:
+        //   - `break_down_scene` — when a photo of a cluttered scene
+        //     is attached + the user signals overwhelm.
+        //   - `pick_next_task` — when the user signals decision
+        //     fatigue ("what now", "brain stopped").
+        //   - `voice_journal_capture` — bypass-the-chat path, called
+        //     imperatively from the Home Journal tile (not by Gemma
+        //     in the loop). Registered here for completeness.
+        //   - `recall_relevant_memories` — when the user references
+        //     something they "told you before."
+        //   - `start_body_double` — the AuADHD differentiator. Bypass-
+        //     the-chat path, dispatched imperatively from `BodyDoublingView`
+        //     when the user taps the "Sit With Me" tile. Writes a
+        //     session memory entry and returns the canonical opening
+        //     line; the view owns the timer + halfway / closing cues.
+        // Order matters: `chatLite`'s curated-tools path exposes the top
+        // 3 from `SkillRegistry.availableSkills().prefix(3)` (the cap
+        // keeps prompt prefill cheap on iPhone). Chat-path tools come
+        // FIRST so they land in that cap; imperative-only tools
+        // (dispatched directly from views — JournalRecordingView /
+        // BodyDoublingView — and never selected by Gemma in chat) come
+        // after. Without this ordering, RecallRelevantMemoriesSkill was
+        // demoted out of the cap, breaking the hero ramble->recall flow
+        // whenever Gemma chose to emit a tool call for it.
         let skills: [any Skill] = [
-            CalendarSkill(source: calendarSource),
-            RemindersSkill(source: calendarSource),
-            CreateReminderSkill(source: calendarSource),
-            ContactsSkill(source: contactsSource),
-            SearchKBSkill(repo: knowledgeRepo),
-            AddNoteSkill(repo: knowledgeRepo),
-            RememberFactSkill(manager: memoryManager),
-            DigestSkill(digestGenerator: digestGenerator),
-            SendWhatsAppSkill(registry: appActionRegistry),
-            SendSMSSkill(registry: appActionRegistry),
-            SendEmailSkill(registry: appActionRegistry),
-            PlaceCallSkill(registry: appActionRegistry),
-            NavigateSkill(registry: appActionRegistry),
-            RequestRideSkill(registry: appActionRegistry),
+            // Chat-path tools (exposed in chatLite curated catalogue):
+            BreakDownSceneSkill(memory: memoryManager),
+            PickNextTaskSkill(memory: memoryManager, calendar: calendarSource),
+            RecallRelevantMemoriesSkill(recall: memoryRecall),
+            // Imperative-only (dispatched from views, never via Gemma):
+            VoiceJournalCaptureSkill(memory: memoryManager),
+            BodyDoubleSkill(memory: memoryManager),
         ]
         let skillRegistry = SkillRegistry(skills: skills)
 
@@ -113,36 +150,18 @@ final class AppContainer {
         self.skillRegistry = skillRegistry
         self.memoryManager = memoryManager
         self.memoryDecayEngine = MemoryDecayEngine(manager: memoryManager)
-        // Embedding-based memory recall. Wires the EmbeddingService +
-        // VectorStore + MemoryManager into a single semantic-recall
-        // API. After this is constructed, every newly-crystallized
-        // memory is auto-indexed (via attachRecallService below) and
-        // RAGPipeline.chatLite calls recall() to inject relevant
-        // facts into the chat prompt's <untrusted> block.
-        let memoryRecall = MemoryRecallService(
-            embedding: embeddingService,
-            vectorStore: vectorStore,
-            manager: memoryManager
-        )
+        // `memoryRecall` was constructed above so it could be passed
+        // into `RecallRelevantMemoriesSkill`. Just assign it here.
         self.memoryRecall = memoryRecall
         self.memoryCrystallizer = MemoryCrystallizer(
             gemma: gemma,
             manager: memoryManager,
             recallService: memoryRecall
         )
-        self.appActionRegistry = appActionRegistry
         let healthSource = HealthSource()
         self.healthSource = healthSource
         self.notificationScheduler = NotificationScheduler()
         self.locationSource = LocationSource()
-        self.motionSource = MotionSource()
-        self.liveActivityManager = LiveActivityManager()
-        self.proactiveDigestGenerator = ProactiveDigestGenerator(
-            calendarSource: calendarSource,
-            memoryManager: memoryManager,
-            healthSource: healthSource,
-            gemma: gemma
-        )
         self.ragPipeline = RAGPipeline(
             gemma: gemma,
             knowledgeRepo: knowledgeRepo,
@@ -150,8 +169,6 @@ final class AppContainer {
             skillRegistry: skillRegistry,
             memoryRecall: memoryRecall
         )
-        self.digestGenerator = digestGenerator
-        self.ingestionCoordinator = IngestionCoordinator(repo: knowledgeRepo)
         let downloader = ModelDownloader(gemma: gemma)
         self.modelDownloader = downloader
         self.benchmarkRunner = BenchmarkRunner(
@@ -160,18 +177,14 @@ final class AppContainer {
         )
         self.audioCaptureService = AudioCaptureService()
         self.visionCaptureService = VisionCaptureService()
-        let musicSource = MusicSource()
-        self.musicSource = musicSource
         let assembler = AmbientSnapshotAssembler(
             location: self.locationSource,
-            motion: self.motionSource,
-            music: musicSource,
             calendar: self.calendarSource,
             health: healthSource
         )
         self.ambientSnapshotAssembler = assembler
-        // Give the RAG pipeline access to the assembler so every
-        // chat turn gets a fresh "right now" block injected.
+        // Give the RAG pipeline access to the assembler so every chat
+        // turn can pull a fresh "right now" block when needed.
         self.ragPipeline.ambientAssembler = assembler
     }
 
@@ -211,33 +224,48 @@ final class AppContainer {
         await knowledgeRepo.loadVectorStoreFromDB()
         try? await memoryManager.rebuildIndex()
 
-        // Bootstrap the embedding-based memory recall index. Walks
-        // every tier and embeds entries that aren't already in the
-        // vector store. Deferred behind a Task.detached because:
-        // (1) it depends on EmbeddingService.load() being warm, which
-        //     happens lazily on first use,
-        // (2) we don't want to block app open on it — chats work
-        //     without recall, just less well, until the index lands.
-        Task.detached { [weak self] in
-            guard let self else { return }
-            await self.memoryRecall.rebuildIndex()
+        // Post-save hook: every successful `MemoryManager.save(...)`
+        // re-embeds the entry into the recall index. Without this, a
+        // freshly-saved memory (e.g. a voice journal recorded seconds
+        // ago) is invisible to semantic recall until the next app
+        // launch's `rebuildIndex()` — which breaks the demo's hero
+        // flow ("ramble into journal, immediately ask 'what did I say
+        // about Maya?'"). Mirrors the `MemoryCrystallizer.attachRecallService`
+        // pattern: avoids a circular type dep that would otherwise
+        // form if MemoryManager imported MemoryRecallService directly.
+        await memoryManager.attachOnSave { [memoryRecall] entry in
+            await memoryRecall.indexEntry(entry)
         }
 
-        // NLContextualEmbedding asset download fails in the iOS Simulator
-        // (permission denied on `/var/db/com.apple.naturallanguaged`). On
-        // device, Apple's CDN delivers the asset on first launch.
+        // DEMO-MODE MEMORY CUT (2026-05-19): the embedding service
+        // load + index rebuild at bootstrap was pushing iPhone past
+        // the foreground-app RAM ceiling alongside Gemma's 3.58 GB
+        // weights — `app.memory-warning` fired twice during bootstrap,
+        // then Metal kernel JIT during first generation pushed it over
+        // and the process was SIGKILL'd before stream.first-token.
         //
-        // On Mac Catalyst / Designed-for-iPad, the NL model adds
-        // ~150 MB of resident memory. That's survivable, but every MB
-        // counts when the user is running Gemma 4 E2B alongside. We
-        // defer the embedding-model load until the first query that
-        // actually needs embeddings (lazy init).
+        // The cut: skip `embeddingService.load()` and skip the eager
+        // `rebuildIndex()`. Semantic recall silently falls back to
+        // rule-based recall (P1 + activePriorities + topK hot topic
+        // by recency from ContextBuilder). Saves ~50 MB at bootstrap
+        // and removes the 8 indexing operations that allocated
+        // temporary buffers during the most memory-pressured window
+        // of app launch. Trade-off: "journal → immediate recall"
+        // hero demo flow becomes rule-based, not semantic — recall
+        // can still surface recent memories by recency / tier, just
+        // not by topical similarity.
+        //
+        // Asset download via `ensureAssetsAvailable()` is kept (cheap,
+        // doesn't load the model into memory; just downloads ~50 MB to
+        // disk for future launches). Must still run before
+        // `EgressGuard.install()` since it hits Apple's CDN.
+        //
+        // NLContextualEmbedding asset download fails in the iOS Simulator
+        // (permission denied on `/var/db/com.apple.naturallanguaged`).
         #if !targetEnvironment(simulator)
         if await !embeddingService.hasAssets() {
             try? await embeddingService.ensureAssetsAvailable()
         }
-        // Embedding model load deferred — see `EmbeddingService.load()`
-        // is now called lazily by `KnowledgeRepository` on first use.
         #endif
 
         // External AltStore testers may update over a broken build, which
@@ -258,6 +286,17 @@ final class AppContainer {
                     config: ModelConfig(variant: selectedVariant)
                 )
                 modelDownloader.markModelReady()
+                // DEMO-MODE MEMORY CUT (2026-05-19): drop any
+                // transient Metal buffers MLX reserved during the
+                // model-load tensor unpack. Gemma 4 E2B's weight load
+                // leaves a non-trivial residual heap that piles on
+                // top of the 3.58 GB model weights, leaving the
+                // foreground app close to its iPhone RAM ceiling
+                // before chat even starts. clearCache here just
+                // releases the unpack scratch, not the weights.
+                #if !targetEnvironment(simulator)
+                MLX.Memory.clearCache()
+                #endif
             } catch {
                 let msg = UserFacingError.message(for: error)
                 modelDownloader.clearDownloadedModelState(message: msg)
@@ -268,39 +307,24 @@ final class AppContainer {
 
         MemoryProbe.snapshot(tag: "bootstrap.post-model-load")
 
-        // If the user has morning digest enabled, make sure it's scheduled.
-        // Safe to call repeatedly — it removes+re-adds the pending request.
-        if notificationScheduler.digestEnabled {
-            await notificationScheduler.scheduleMorningDigest()
-        }
-
         EgressGuard.install()
 
         // Activate ambient sources for anything the user has already
-        // granted permission to. We never prompt here — that would be
-        // invasive on launch. Permissions are requested in context
-        // (the first time a feature needs them).
-        //
-        // Location: if "When in Use" or "Always" is already granted,
-        // start significant-change monitoring so the morning briefing
-        // has place context without further user action.
+        // granted permission to. Location stays kept for v2 ambient
+        // signal — AuADHD v1 doesn't fire on arrived-home triggers.
         if locationSource.authorizationStatus == .authorizedWhenInUse ||
            locationSource.authorizationStatus == .authorizedAlways {
             locationSource.startMonitoring()
             EidosLogger.shared.log(.info, category: .app, event: "location.auto-start")
         }
 
-        // Register the background nudge task. iOS only — Mac Catalyst's
-        // BGTaskScheduler is a no-op silently. After register, the task
-        // is dormant; first scheduleNext() happens when the app
-        // backgrounds. We schedule one immediately so iOS has a queued
-        // request to consider on the very first background crossing.
-        #if os(iOS) && !targetEnvironment(macCatalyst)
-        NudgeBackgroundTask.register(
-            proactive: proactiveDigestGenerator,
-            notifications: notificationScheduler
-        )
-        NudgeBackgroundTask.scheduleNext()
+        // Demo-time data fixture. Only fires in DEBUG, only when the
+        // activePriorities tier is empty — never overwrites real user
+        // data. Gives the "What Now" flow a realistic spread of tasks
+        // so the picker has something to land on during the hackathon
+        // demo shoot.
+        #if DEBUG
+        await seedDemoActivePrioritiesIfEmpty()
         #endif
 
         isBootstrapped = true
@@ -308,21 +332,76 @@ final class AppContainer {
         MemoryProbe.snapshot(tag: "bootstrap.done")
     }
 
+    #if DEBUG
+    /// Seeds five canonical activePriorities entries the first time the
+    /// app launches on a clean install. Idempotent — re-runs see an
+    /// already-populated tier and bail. The entries are written through
+    /// `MemoryManager.save(_:)` so the `onSave` recall hook fires and
+    /// they become semantically findable on the same launch.
+    private func seedDemoActivePrioritiesIfEmpty() async {
+        let existing = await memoryManager.index.records(tier: .activePriorities)
+        guard existing.isEmpty else { return }
+
+        let fixtures: [(title: String, body: String, priority: MemoryPriority)] = [
+            ("Email Maya re: Q3 timeline pushback",
+             "Reply to Maya's thread about the Q3 slip. Two paragraphs max — name the date, name the unblocker.",
+             .p2),
+            ("Schedule annual physical",
+             "Find the GP's number, book the next open slot. Insurance card is in the wallet.",
+             .p2),
+            ("Move laundry to dryer",
+             "Wet load has been in the washer since this morning.",
+             .p3),
+            ("Reply to Dad about Sunday",
+             "Sunday lunch — yes/no. He texted Thursday.",
+             .p3),
+            ("Buy birthday card for Sam",
+             "Sam's birthday is in 9 days. Card + small note.",
+             .p3),
+        ]
+
+        for fixture in fixtures {
+            let entry = MemoryEntry(
+                tier: .activePriorities,
+                title: fixture.title,
+                body: fixture.body,
+                priority: fixture.priority,
+                tags: ["demo-seed"]
+            )
+            do {
+                // `reindex: false` skips the onSave hook because the
+                // recall index is bootstrapped on a Task.detached path
+                // and may not have loaded the NLContextualEmbedding
+                // assets yet by the time bootstrap reaches the seed.
+                // Without this, every seeded entry logs
+                // `memory.recall.index-failed — Embedding service is
+                // not loaded` (5× per launch). Seeded priorities don't
+                // need semantic recall: they're surfaced by the
+                // `PickNextTaskSkill` rule-based path and by the
+                // Memory tab's tier-grouped browser. Real user-created
+                // entries (journals, scene breakdowns) still index
+                // normally via the hook.
+                _ = try await memoryManager.save(entry, reindex: false)
+            } catch {
+                EidosLogger.shared.error(
+                    .memory,
+                    event: "bootstrap.demo-seed.failed",
+                    error: error,
+                    failure: .memoryWrite,
+                    extra: ["title": fixture.title]
+                )
+            }
+        }
+        EidosLogger.shared.log(
+            .info, category: .memory,
+            event: "bootstrap.demo-seed.ok",
+            payload: ["count": fixtures.count]
+        )
+    }
+    #endif
+
     /// Hooks `UIApplication.didReceiveMemoryWarningNotification` so we
     /// log + react to pressure before the OS jetsams us.
-    ///
-    /// On Mac (Designed for iPad), iPhones with ≤6 GB RAM, or any device
-    /// that has another memory-hungry app active at the same time, the
-    /// combined Gemma-weights + KV-cache + UI footprint can push past
-    /// the jetsam threshold. When a warning fires we:
-    ///   1. Log the current RSS + thermal reading.
-    ///   2. Auto-disable `longContextPackingEnabled` so the next RAG
-    ///      turn uses the conservative 12 K-char budget. This is the
-    ///      single biggest memory lever we control at runtime.
-    ///   3. Tell the user in a follow-up log line.
-    ///
-    /// We do NOT auto-unload Gemma — it's too painful to reload and the
-    /// warning rarely reflects a true crisis on modern devices.
     private func installMemoryWarningHandler() {
         #if canImport(UIKit)
         NotificationCenter.default.addObserver(

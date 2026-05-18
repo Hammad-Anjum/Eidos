@@ -72,15 +72,6 @@ struct ChatView: View {
         }
         .navigationTitle("Eidos")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: Binding(
-            get: { container.appActionRegistry.pending.first },
-            set: { _ in }
-        )) { action in
-            ActionConfirmationSheet(
-                action: action,
-                registry: container.appActionRegistry
-            )
-        }
         .onAppear {
             if vm == nil {
                 vm = ChatViewModel(
@@ -89,6 +80,10 @@ struct ChatView: View {
                     modelContext: modelContext
                 )
             }
+            consumePendingChatLaunch()
+        }
+        .onChange(of: container.pendingChatLaunch?.id) { _, _ in
+            consumePendingChatLaunch()
         }
         .onDisappear { vm?.endSession() }
         .toolbar {
@@ -162,8 +157,14 @@ struct ChatView: View {
                         )
                         .id(msg.id)
                     }
+                    if vm.warmupNoticeVisible {
+                        warmupNoticeBubble(vm: vm)
+                    }
                     if let err = vm.errorMessage {
                         errorBubble(err)
+                    }
+                    if let suggestion = vm.suggestedIntent {
+                        intentSuggestionChip(suggestion, vm: vm)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -243,6 +244,73 @@ struct ChatView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - Intent suggestion chip
+
+    /// Reminder/todo suggestion surfaced after a user message when
+    /// `IntentExtractor` detects an explicit save phrase ("remind me
+    /// to…", "I should…", etc.). Stays light visually so it never
+    /// competes with assistant replies — full-width pill with two
+    /// small actions. User-authored only: nothing here ever fires
+    /// without the user having literally written the trigger phrase.
+    @ViewBuilder
+    private func intentSuggestionChip(
+        _ suggestion: IntentExtractor.Suggestion,
+        vm: ChatViewModel
+    ) -> some View {
+        let memoryManager = container.memoryManager
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: suggestion.kind == .reminder
+                      ? "bell.badge.fill" : "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.teal)
+                Text("Save as priority?")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(suggestion.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+            HStack(spacing: 8) {
+                Button {
+                    Task { await vm.saveSuggestion(into: memoryManager) }
+                } label: {
+                    Label("Save", systemImage: "tray.and.arrow.down.fill")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(minHeight: 36)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.teal)
+
+                Button {
+                    vm.dismissSuggestion()
+                } label: {
+                    Text("Not now")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(minHeight: 36)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.teal.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(Color.teal.opacity(0.25), lineWidth: 1)
+                )
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Suggested priority: \(suggestion.title). Save or dismiss.")
+    }
+
     // MARK: - Bubbles
 
     private func messageBubble(_ msg: ChatViewModel.Message, isStreaming: Bool) -> some View {
@@ -300,6 +368,41 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - ChatLaunchIntent consumption
+
+    /// Drains `container.pendingChatLaunch` if one is queued. Fires
+    /// `vm?.send(...)` when `autoSend` is true; otherwise (future)
+    /// populates the input field. Clears the intent so it doesn't
+    /// re-fire on subsequent re-renders.
+    ///
+    /// Called from both `.onAppear` (first appearance after a tile
+    /// tap on a fresh launch) and `.onChange(of: container.pendingChatLaunch?.id)`
+    /// (subsequent tile taps while the user is mid-session).
+    private func consumePendingChatLaunch() {
+        guard let intent = container.pendingChatLaunch else { return }
+        // Clear immediately so a re-render doesn't double-fire. We
+        // hold a local copy in `intent` for the actual dispatch.
+        container.pendingChatLaunch = nil
+        guard let vm else {
+            // Defensive: if onAppear ran but the vm hasn't constructed
+            // yet (shouldn't happen — onAppear constructs first), log
+            // and skip. The intent is already cleared so the next tile
+            // tap is the next chance.
+            EidosLogger.shared.log(.warn, category: .chat,
+                event: "chat.launch.dropped",
+                message: "ChatViewModel was nil when intent arrived.")
+            return
+        }
+        if intent.autoSend {
+            vm.send(intent.prompt,
+                    displayText: intent.displayText,
+                    image: intent.image)
+        } else {
+            // Future: populate-only path. For v1 every tile auto-sends.
+            input = intent.prompt
+            attachedImage = intent.image
+        }
+    }
     // MARK: - Error
 
     private func errorBubble(_ err: String) -> some View {
@@ -313,5 +416,31 @@ struct ChatView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// One-shot "first photo is slow" notice. Mirrors `errorBubble`'s
+    /// shape so the visual treatment stays consistent, but uses the
+    /// accent color (informational) rather than orange (problem). The
+    /// VM clears `warmupNoticeVisible` on every terminal path of
+    /// generation; the `.task` here is a 90 s backstop in case the
+    /// generation never returns and the VM never clears it.
+    private func warmupNoticeBubble(vm: ChatViewModel) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "wand.and.stars")
+                .foregroundStyle(.tint)
+                .symbolEffect(.pulse, options: .repeating)
+            Text("Warming up the vision model — first photo can take 30-60 s on iPhone. Subsequent photos are fast.")
+                .font(.callout)
+                .foregroundStyle(.primary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+        .task {
+            try? await Task.sleep(nanoseconds: 90_000_000_000)
+            if !Task.isCancelled {
+                vm.warmupNoticeVisible = false
+            }
+        }
     }
 }

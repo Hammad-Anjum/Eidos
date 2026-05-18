@@ -74,7 +74,7 @@ final class LocationSource: NSObject, CLLocationManagerDelegate {
     }
 
     /// One-shot fix for callers that want "where am I right now?" —
-    /// e.g. ProactiveDigestGenerator on every refresh.
+    /// e.g. arrived-home dose triggers and ambient-snapshot context.
     func currentFix() async -> PlaceFix? {
         guard manager.authorizationStatus.isAuthorized else { return nil }
         let loc: CLLocation?

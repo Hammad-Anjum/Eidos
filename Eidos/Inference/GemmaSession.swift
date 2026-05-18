@@ -10,12 +10,30 @@ import MLXVLM
 import MLXHuggingFace
 import HuggingFace
 import Tokenizers
+#if canImport(UIKit)
+import UIKit
+#endif
+
+/// Reference-type holder shared between the inference task and its
+/// sibling heartbeat task in `wrapMLXStream`. `emittedAny` transitions
+/// false→true exactly once when MLX yields the first chunk. The
+/// transition is benign without synchronization: the heartbeat reads
+/// it to decide whether to stop and what to put in its payload —
+/// worst case one extra heartbeat fires with `first_token: false`
+/// after the transition. A reference type is required because a local
+/// `var Bool` captured by the heartbeat task would be a copy, not the
+/// inference task's live value. `@unchecked Sendable` is justified by
+/// the single-writer / monotonic-transition invariant.
+private final class HeartbeatState: @unchecked Sendable {
+    var emittedAny = false
+}
 
 enum GemmaError: Error, LocalizedError {
     case notLoaded
     case filesMissing(String)
     case thermalCritical
     case memoryConstrained(availableMB: Int)
+    case appBackgrounded
 
     var errorDescription: String? {
         switch self {
@@ -24,6 +42,8 @@ enum GemmaError: Error, LocalizedError {
         case .thermalCritical: "Device too hot for inference. Let it cool down."
         case .memoryConstrained(let mb):
             "Not enough free memory (\(mb) MB available). Close some apps and try again."
+        case .appBackgrounded:
+            "Eidos paused because it's running in the background. Bring the app back to the foreground to continue."
         }
     }
 }
@@ -73,6 +93,40 @@ actor GemmaSession {
             next.resume()
         } else {
             isInferenceBusy = false
+        }
+    }
+
+    /// True when GPU command-buffer submission is permitted by the
+    /// current app lifecycle state. Metal rejects buffers submitted
+    /// while the iOS app is `.background` with
+    /// `kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted`,
+    /// which MLX surfaces as an uncaught `std::runtime_error` that
+    /// crashes the process (the Swift runtime cannot catch C++
+    /// exceptions across the FFI boundary). The fix is to detect the
+    /// state ourselves before MLX submits the next buffer and abort
+    /// the stream cleanly with a typed Swift error.
+    ///
+    /// `.inactive` (Face ID prompt up, Control Center pulled down,
+    /// incoming-call banner) is still foreground from Metal's GPU
+    /// perspective — only `.background` triggers the rejection. So
+    /// the predicate is `!= .background`, not `== .active`. Using
+    /// `== .active` would over-block during the applock Face ID
+    /// dialog and refuse legitimate generations.
+    ///
+    /// Mac, Mac Catalyst, and simulator don't have the background-GPU
+    /// restriction; this returns `true` unconditionally there.
+    nonisolated static func isAppForegroundOK() async -> Bool {
+        switch DeviceProfile.formFactor {
+        case .mac, .simulator:
+            return true
+        case .iPhone, .iPad:
+            #if canImport(UIKit)
+            return await MainActor.run {
+                UIApplication.shared.applicationState != .background
+            }
+            #else
+            return true
+            #endif
         }
     }
 
@@ -349,6 +403,21 @@ actor GemmaSession {
             throw GemmaError.memoryConstrained(availableMB: availableMB)
         }
 
+        // Pre-flight background check. Refuse to start a generation
+        // when the app is currently in `.background` — Metal will
+        // reject the first command buffer with kIOGPU... and MLX
+        // will translate that into an uncaught C++ exception that
+        // SIGKILLs the process. Throwing here gives the UI a clean
+        // error to render instead. The companion mid-stream check
+        // inside `wrapMLXStream` handles transitions that happen
+        // after generation has started.
+        guard await Self.isAppForegroundOK() else {
+            EidosLogger.shared.log(.warn, category: .model,
+                event: "generate.\(kind).backgrounded-abort",
+                failure: .modelGenerate)
+            throw GemmaError.appBackgrounded
+        }
+
         await acquireInferenceLock()
         EidosLogger.shared.log(.info, category: .model,
             event: "generate.\(kind).lock-acquired",
@@ -421,8 +490,51 @@ actor GemmaSession {
         kind: String
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
+            // Shared state between inference task and the sibling
+            // heartbeat task spawned below. See HeartbeatState doc.
+            let state = HeartbeatState()
+            let startTime = Date()
+
+            // Sibling heartbeat task. Bridges the blind window between
+            // `stream.start` and `stream.first-token` — MLX's C++ Metal
+            // JIT compiler runs first-pass kernel compilation here with
+            // zero Swift-visible activity, which on iPhone can take
+            // 30-60s for the LLM and longer with the vision encoder.
+            // Without this log, we cannot distinguish "MLX still
+            // compiling" from "process OOM-killed by jetsam." The last
+            // heartbeat timestamp bounds time-of-death within 2 s.
+            //
+            // Detached + utility priority so the loop is off the
+            // cooperative thread the inference task may share with
+            // other actor work. Read-only — no lock, no MLX state.
+            // Auto-stops after first token OR 60 ticks (120 s) so
+            // long generations don't balloon the JSONL.
+            let heartbeatTask = Task.detached(priority: .utility) {
+                var ticks = 0
+                while !Task.isCancelled && !state.emittedAny && ticks < 60 {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if Task.isCancelled || state.emittedAny { break }
+                    ticks += 1
+                    let elapsedMs = Int(Date().timeIntervalSince(startTime) * 1000)
+                    EidosLogger.shared.log(.info, category: .model,
+                        event: "generate.\(kind).stream.heartbeat",
+                        payload: [
+                            "tick": ticks,
+                            "elapsed_ms": elapsedMs,
+                            "first_token": state.emittedAny,
+                            "available_mb": DeviceProfile.availableMemoryMB,
+                            "thermal": ProcessInfo.processInfo.thermalState.rawValue,
+                        ])
+                }
+            }
+
             let task = Task { [weak self] in
-                var emittedAny = false
+                // `defer` runs on every exit path — success, both
+                // catches, and the early `return` from the thermal /
+                // background abort branches — so heartbeat always
+                // stops. Without defer, the abort paths would leak
+                // the heartbeat task until its 120 s ceiling expires.
+                defer { heartbeatTask.cancel() }
                 var releasedLock = false
                 let release: @Sendable () async -> Void = { [weak self] in
                     guard let self else { return }
@@ -434,7 +546,7 @@ actor GemmaSession {
                 do {
                     for try await generation in stream {
                         if case .chunk(let text) = generation {
-                            if !emittedAny {
+                            if !state.emittedAny {
                                 EidosLogger.shared.log(.info, category: .model,
                                     event: "generate.\(kind).stream.first-token",
                                     payload: [
@@ -442,7 +554,11 @@ actor GemmaSession {
                                         "available_mb": DeviceProfile.availableMemoryMB,
                                     ])
                             }
-                            emittedAny = true
+                            // Flip BEFORE yield so the heartbeat's next
+                            // iteration observes the transition and
+                            // auto-stops, instead of logging one more
+                            // heartbeat with stale `first_token: false`.
+                            state.emittedAny = true
                             continuation.yield(text)
                         }
                         if ProcessInfo.processInfo.thermalState == .critical {
@@ -454,11 +570,31 @@ actor GemmaSession {
                             releasedLock = true
                             return
                         }
+                        // Same shape as the thermal guard above. If the
+                        // app moved to `.background` between this chunk
+                        // and the next, the upcoming Metal command-buffer
+                        // submission would be rejected with kIOGPU... and
+                        // MLX would throw an uncaught C++ exception that
+                        // SIGKILLs the process. We can't catch that across
+                        // the FFI boundary, so we must abort *before* the
+                        // next iteration submits work. There remains a
+                        // race window if the app backgrounds between this
+                        // check and the next MLX submission, but it's
+                        // bounded by chunk cadence (~50-200 ms).
+                        if !(await Self.isAppForegroundOK()) {
+                            EidosLogger.shared.log(.warn, category: .model,
+                                event: "generate.\(kind).stream.backgrounded-abort",
+                                failure: .modelGenerate)
+                            continuation.finish(throwing: GemmaError.appBackgrounded)
+                            await release()
+                            releasedLock = true
+                            return
+                        }
                     }
                     EidosLogger.shared.log(.info, category: .model,
                         event: "generate.\(kind).stream.done",
                         payload: [
-                            "emitted": emittedAny,
+                            "emitted": state.emittedAny,
                             "available_mb": DeviceProfile.availableMemoryMB,
                         ])
                     continuation.finish()
@@ -467,7 +603,7 @@ actor GemmaSession {
                     // Don't tag as error; just log and finish cleanly.
                     EidosLogger.shared.log(.info, category: .model,
                         event: "generate.\(kind).stream.cancelled",
-                        payload: ["emitted": emittedAny])
+                        payload: ["emitted": state.emittedAny])
                     continuation.finish()
                 } catch {
                     EidosLogger.shared.error(.model,
@@ -483,7 +619,12 @@ actor GemmaSession {
             continuation.onTermination = { _ in
                 // Cancellation — task body hits CancellationError, runs
                 // the catch path, then release(). We just need to make
-                // sure the iteration stops draining MLX.
+                // sure the iteration stops draining MLX. Also cancel
+                // the heartbeat directly here — the inference task's
+                // `defer` would eventually do it, but cancelling now
+                // shortens the window where heartbeats fire after the
+                // consumer has already torn down.
+                heartbeatTask.cancel()
                 task.cancel()
             }
         }
@@ -535,12 +676,113 @@ actor GemmaSession {
             return "Good morning. (Simulator mock — on a real device, Gemma narrates from your calendar + reminders + memory. Nothing else on your plate right now.)"
         }
 
-        // Generic chat.
-        let trimmed = user.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.lowercased().contains("2 + 2") || trimmed.contains("2+2") {
-            return "4. (Simulator mock response — real Gemma runs on-device on iPhone / Mac.)"
+        // Tight, tone-aware chat fallback for the simulator.
+        //
+        // The RAG path injects retrieved context inside `<untrusted ...>`
+        // wrappers and `## Right now` / `## What I remember` blocks
+        // before the user's own words. Naively echoing the user payload
+        // back surfaced those internal scaffolding tags in the chat
+        // bubble during smoke testing — visible in screenshots, would
+        // be embarrassing in any sim-recorded demo clip. We strip the
+        // scaffolding first and then key off intent words to return a
+        // short, contextually-warm response that mirrors what real
+        // Gemma would emit. No echoing of the raw payload.
+        let cleaned = stripPromptScaffolding(user)
+        let intent  = cleaned.lowercased()
+
+        // Math smoke test — keep it; the Diagnostics smoke pane uses it
+        // to prove the stream layer works end-to-end.
+        if intent.contains("2 + 2") || cleaned.contains("2+2") {
+            return "4."
         }
-        return "I hear you: \"\(trimmed.prefix(120))\". (Simulator mock — real Gemma runs on-device on iPhone / Mac.)"
+
+        // Grounding / RSD signals — calming script. Tone: present, no
+        // questions, no "should", ends without a follow-up question.
+        if intent.contains("spiral") || intent.contains("ground")
+            || intent.contains("criticized") || intent.contains("want to quit")
+            || intent.contains("can't think") || intent.contains("rsd")
+            || intent.contains("overstim") || intent.contains("overwhelm") {
+            return "I'm here. Try this: name five things you can see right now. Then breathe in for four, hold for two, out for six — twice. When you're ready, stand up and walk to a window."
+        }
+
+        // Decision paralysis — short, one pick.
+        if intent.contains("what now") || intent.contains("brain stopped")
+            || intent.contains("can't start") || intent.contains("where do i begin")
+            || intent.contains("don't know where to start") {
+            return "Pick the smallest thing on your list. Five minutes. That's the whole commitment."
+        }
+
+        // Body-doubling intent.
+        if intent.contains("sit with") || intent.contains("body double")
+            || intent.contains("focus with me") {
+            return "I'm here. Start whenever."
+        }
+
+        // Hopeless / down — hopeful but quiet, never minimizing.
+        if intent.contains("depressed") || intent.contains("hopeless")
+            || intent.contains("nothing matters") || intent.contains("can't keep going") {
+            return "I'm here. The day's been heavy — that's information, not a verdict. Want to sit with it together for a few minutes?"
+        }
+
+        // Anxious / panicky — steady down, breath-led.
+        if intent.contains("panic") || intent.contains("anxious")
+            || intent.contains("racing") || intent.contains("heart") {
+            return "Slow it down with me. In for four, hold for two, out for six. Twice. That's it for now."
+        }
+
+        // Energetic / ambitious — steady-supportive, mirror-down so we
+        // don't amp dysregulation; honor the energy without matching it.
+        if intent.contains("excited") || intent.contains("let's go")
+            || intent.contains("can do anything") || intent.contains("on a roll") {
+            return "Good energy. Pick one concrete next step and start. I'm right here."
+        }
+
+        // Empty / placeholder intent (rare but covers edge cases).
+        if cleaned.isEmpty {
+            return "I'm here. Take your time."
+        }
+
+        // Generic warm fallback — never echoes raw input, no "Simulator
+        // mock" tag in the line (the audience-facing tone should be
+        // identical to real Gemma; mock provenance lives in the chat
+        // bubble's metadata or the Diagnostics log, not in the copy).
+        return "I hear that. Want to keep talking, or would you rather sit quietly?"
+    }
+
+    /// Strips the RAG layer's prompt-injection defense scaffolding from
+    /// user-role content before the mock examines intent. Without this,
+    /// the cleaner downstream branches above can match on retrieved-
+    /// memory boilerplate instead of the user's actual words.
+    nonisolated private static func stripPromptScaffolding(_ text: String) -> String {
+        var cleaned = text
+        // Drop <untrusted reason="...">...</untrusted> blocks entirely;
+        // their payload is retrieved data, not the user's utterance.
+        while let openRange = cleaned.range(of: "<untrusted") {
+            if let endTag = cleaned.range(
+                of: "</untrusted>",
+                range: openRange.upperBound..<cleaned.endIndex
+            ) {
+                cleaned.removeSubrange(openRange.lowerBound..<endTag.upperBound)
+            } else if let firstGT = cleaned.range(
+                of: ">",
+                range: openRange.upperBound..<cleaned.endIndex
+            ) {
+                // No closing tag — drop everything from the opening
+                // bracket to the end so a malformed wrapper doesn't
+                // smuggle context through.
+                cleaned.removeSubrange(openRange.lowerBound..<firstGT.upperBound)
+            } else {
+                cleaned.removeSubrange(openRange.lowerBound..<cleaned.endIndex)
+                break
+            }
+        }
+        // Drop the RAG section headers we know about. They're injected
+        // by `ContextBuilder` and confuse the keyword router below.
+        let droppedHeaders = ["## What I remember", "## Right now", "## From your notes"]
+        for header in droppedHeaders {
+            cleaned = cleaned.replacingOccurrences(of: header, with: "")
+        }
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     #endif
 }

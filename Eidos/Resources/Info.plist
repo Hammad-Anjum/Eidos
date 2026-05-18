@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.12</string>
+	<string>1.1.0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -32,42 +32,27 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>12</string>
-	<key>LSApplicationQueriesSchemes</key>
-	<array>
-		<string>whatsapp</string>
-		<string>sms</string>
-		<string>mailto</string>
-		<string>tel</string>
-		<string>maps</string>
-		<string>comgooglemaps</string>
-		<string>uber</string>
-		<string>facetime</string>
-	</array>
-	<key>NSAppleMusicUsageDescription</key>
-	<string>Eidos can weave your recently-played Apple Music into your briefing. Music history never leaves your iPhone.</string>
+	<string>13</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Eidos reads your calendar to give you context-aware briefings and reminders. Event data never leaves your iPhone.</string>
+	<string>Eidos reads your next calendar event so the What Now flow can offer a built-in stop signal ("you have 23 minutes before X"). Event data never leaves your iPhone.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Eidos uses the camera so you can snap a photo and ask questions about it. Images are processed on-device and never uploaded.</string>
+	<string>Eidos uses the camera for the Look flow — point at a cluttered scene and Gemma 4 narrates a 3-step plan, on-device. Images never leave your iPhone.</string>
 	<key>NSContactsUsageDescription</key>
-	<string>Eidos uses your contacts to understand who you mean when you say names. Contact data never leaves your iPhone.</string>
+	<string>Eidos uses your contacts to understand who you mean when you reference a person by name in journal entries. Contact data never leaves your iPhone.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>Eidos reads a minimal set of health metrics (sleep, steps, heart rate, active energy) to personalize your morning briefing. Data never leaves your iPhone — only insights are stored.</string>
+	<string>Reserved for v2 — sensory-regulation biofeedback via HRV. Not used in v1. Data never leaves your iPhone.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Eidos doesn't write to HealthKit. This permission is required by iOS when requesting any health access.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>For ambient place memory, allow Always. Eidos records only significant changes — never your exact path — and only on-device.</string>
+	<string>Reserved for v2. Not used in v1.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Eidos notes the places you go (home, work, gym) so your briefing knows your context. Location never leaves your iPhone.</string>
+	<string>Reserved for v2 — location-aware nudges. Not used in v1.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Eidos transcribes your voice on-device so you can chat hands-free. Audio never leaves your iPhone.</string>
-	<key>NSMotionUsageDescription</key>
-	<string>Eidos uses motion activity (walking, running, driving) and step count to personalize your briefing. Never leaves your iPhone.</string>
+	<string>Eidos transcribes your voice on-device so you can journal, ground, and ask hands-free. Audio never leaves your iPhone.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Eidos reads photos you explicitly pick so you can ask questions about them. Images are processed on-device and never uploaded.</string>
+	<string>Eidos reads photos you explicitly pick so Gemma 4 can describe the scene for a step-by-step plan, on-device. Images never leave your iPhone.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
-	<string>Eidos reads and creates reminders on your behalf. Reminder data never leaves your iPhone.</string>
+	<string>Eidos may create a reminder from a journal entry on request. Reminder data never leaves your iPhone.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Eidos uses Apple's on-device speech recognition to turn your voice into text. Your speech is never sent to a server.</string>
 	<key>NSSupportsLiveActivities</key>

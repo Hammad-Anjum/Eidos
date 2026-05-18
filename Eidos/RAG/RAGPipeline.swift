@@ -52,7 +52,8 @@ final class RAGPipeline {
         self.memoryRecall = memoryRecall
         self.contextBuilder = ContextBuilder(
             memoryManager: memoryManager,
-            knowledgeRepo: knowledgeRepo
+            knowledgeRepo: knowledgeRepo,
+            memoryRecall: memoryRecall
         )
     }
 
@@ -120,12 +121,25 @@ final class RAGPipeline {
         // Ambient snapshot — optional, fresh each turn.
         let ambientLine = await ambientAssembler?.assemble().readable
 
+        // User display name from onboarding. Seeded by IdentityStep
+        // (`eidos.user.displayName`). When present, `PromptTemplates.chat`
+        // threads it into the runtime context block so Gemma can
+        // address the user by name. nil falls back to neutral "you"
+        // phrasing — explicitly fine; the audience picks "Skip for
+        // now" intentionally and shouldn't get name-substitution
+        // glitches.
+        let rawDisplayName = UserDefaults.standard
+            .string(forKey: "eidos.user.displayName")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let userDisplayName: String? = (rawDisplayName?.isEmpty == false) ? rawDisplayName : nil
+
         let messages = PromptTemplates.chat(
             history: history,
             userMessage: userMessage,
             retrievedContext: context.text,
             toolSchemasJSON: toolJSON,
-            ambientSnapshot: ambientLine
+            ambientSnapshot: ambientLine,
+            userDisplayName: userDisplayName
         )
 
         let availableSkillCount = await skillRegistry.availableSkills().count
@@ -208,10 +222,61 @@ final class RAGPipeline {
         dateFmt.timeStyle = .none
         let today = dateFmt.string(from: Date())
 
+        // User display name from onboarding's IdentityStep. Optional;
+        // when absent we fall back to neutral "you" phrasing. Sanitized
+        // to ASCII per the chatLite system-prompt invariant — the
+        // v12 crash was caused by template-content non-ASCII (smart
+        // quotes, em-dashes) destabilizing tokenization, and we keep
+        // the same bar for user-supplied content injected into the
+        // template even though it's much less likely to break.
+        let asciiName: String? = {
+            let raw = UserDefaults.standard
+                .string(forKey: "eidos.user.displayName")?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let raw, !raw.isEmpty else { return nil }
+            let stripped = raw
+                .applyingTransform(.stripDiacritics, reverse: false) ?? raw
+            // Reject anything that still contains non-ASCII after
+            // diacritic stripping (CJK / Arabic / etc). Better to use
+            // neutral "you" than to inject characters that historically
+            // broke this path.
+            return stripped.allSatisfy({ $0.isASCII }) ? stripped : nil
+        }()
+
+        let nameLine: String = {
+            guard let name = asciiName else { return "" }
+            return " The user goes by \(name); address them by name."
+        }()
+
+        // AuADHD-essential addendum is ASCII-only, no markdown headers,
+        // no smart quotes, no em-dashes, no literal app-output strings.
+        // Total chatLite system prompt stays under ~1.2 KB so it does
+        // not push prefill back into the OOM-jetsam zone that the giant
+        // `PromptTemplates.systemPrompt` triggers when the full pipeline
+        // runs on iPhone. The 4-step grounding script is inlined here
+        // so the Ground surface can fire from chatLite without needing
+        // the full AuADHD systemPrompt or a dedicated tool.
         let systemContent = """
         You are Eidos, a private on-device AI assistant running locally on the user's iPhone. \
         Today is \(today). Reply concisely, warmly, and honestly. \
-        Never claim you can't remember things across conversations - that's not true here.
+        Never claim you can't remember things across conversations - that's not true here.\(nameLine)
+
+        The user is an AuDHD adult. Default to short replies, one option not three. \
+        Avoid moralizing words like "should", "must", "important", "really need to". \
+        No streaks, no shame language, no pathologizing ("stuck", not "broken").
+
+        If the user signals acute dysregulation (phrases like "spiraling", "can't think", \
+        "want to quit", "got criticized", "overwhelmed", "RSD"), reply with a 4-step \
+        grounding script: name the sensation in one sentence, then a sensory cue \
+        ("name five things you can see"), then a breath cue ("in for four, hold two, \
+        out for six, twice"), then one small physical action ("stand up, walk to a \
+        window"). End there, no follow-up question, do not call a tool.
+
+        If the user attaches a photo and signals visual overwhelm (phrases like \
+        "where to start", "too much", "messy", "don't know what to do", "looking at this"), \
+        call the break_down_scene tool. Pass a 2-3 sentence scene_description, \
+        ONE 5-minute first_action, and two short next_two_steps. Do not describe the photo \
+        in prose first - emit the JSON tool call directly.
         """
 
         // Rolling token-budget window. Carries as many recent turns as

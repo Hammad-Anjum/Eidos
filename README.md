@@ -1,26 +1,122 @@
-# Eidos
+# Eidos — On-Device AuDHD Companion
 
-A fully-local iOS personal AI assistant. Gemma 4 runs on-device via MLX Swift, embeddings come from Apple `NLContextualEmbedding`, persistence is SwiftData, and **zero data leaves the device** after the initial model download.
+> Submission to the **Kaggle Gemma 4 Good Hackathon** (deadline
+> 2026-05-18). Track: **Digital Equity** (with overlap into Health &
+> Sciences for the RSD / burnout safety angle).
+>
+> An iOS app for AuDHD adults — the autism + ADHD overlap — that
+> looks at your mess and tells you where to start, grounds you when
+> criticism stings, listens when you ramble, and never asks you to do
+> executive function to use it. **No byte ever leaves your phone.**
 
-See [masterplan.md](masterplan.md) for the live strategic roadmap. [architecture.md](architecture.md) is historical, and known gaps/deferred work live in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
+## The problem
 
-## Status
+There are ~1.5M+ members on r/ADHD, ~2M+ across r/autism and
+r/AutismInWomen, and a fast-growing r/AuDHD community for adults
+discovering they're both. They drop apps fast: per RevenueCat and
+follow-up Wellnest research, **54% of ADHD users drop apps within
+weeks** — the apps demand the exact executive function the user
+lacks.
 
-Phases 0-8 have shipped in scoped form. The roadmap is tracked in `masterplan.md` — each phase notes what made it in vs. what was deferred with a clear reason.
+The existing market fails the AuDHD adult specifically:
 
-- **0** Scaffolding — ✅
-- **1** Persistence + embeddings + hybrid RRF — ✅
-- **2** Inference (MLX Swift + Gemma 4) — ✅ (real-device validation pending)
-- **3** Memory system + RAG + voice + KB browser — ✅
-- **4** Platform sources + skills + home/digest — ✅ (4.3 relationship intel / 4.4 notifications → 6.x deferred)
-- **5** App actions + importers — ✅
-- **6** Proactive intelligence + HealthKit + notifications — ✅ (6.1 routine learner / 6.4 life log / 6.5 tone engine deferred)
-- **7** Polish + tests + ship-readiness — ✅
-- **8** Multimodal + observability — ✅
+- **Tiimo** ($54/yr, 2025 App Store App of the Year) is beautiful at
+  visual planning but **doesn't help when planning has already
+  failed**.
+- **Goblin Tools** is free and viral, but cloud-routed — your messy
+  task list goes to OpenAI.
+- **Inflow** ($95/yr) ships CBT modules and a coach feel; rejection-
+  sensitive users find structured planning content defeating.
+- **Saner.AI** ($8-20/mo) is cloud chat.
+- **Spoons** ($79/yr) gets the design philosophy right (offline, no
+  gamification, autistic-built) but is a single-purpose energy
+  tracker — not a companion.
 
-192 tests, all passing.
+Apple's Siri 2.0 partnered with Google Gemini in early 2026, so even
+the "system AI" voluntarily forfeited the pure-on-device privacy
+claim. **Data brokers actively sell ADHD / depression / autism
+diagnosis lists** ($2,500 for a depressed-individuals list with names
++ addresses per IDX research); insurance underwriters use them. The
+AuDHD adult walks in already knowing they don't want their burnout
+log shipped to OpenAI.
+
+## What it does
+
+Four flows, all voice-first or camera-first, all on-device:
+
+| Flow | When you'd use it | What happens |
+|---|---|---|
+| **Look** | Looking at a cluttered desk / inbox / chore list | Tap camera. Photo. Gemma 4 vision narrates a spoken 3-step plan with a 5-minute commitment. |
+| **Ground** | Just got criticized; spiraling; can't think | Voice in. Eidos returns a scripted grounding response (5-4-3-2-1 sensory cue, breath cue, one physical action). It does NOT ask "do you want to talk about it." |
+| **Journal** | Need to get a hard conversation or feeling out of your head | Tap mic. Ramble. Stop. Eidos crystallizes the rambling into tagged memory entries you can find later. |
+| **What Now** | "I have fifteen things and my brain stopped." | Voice in. Eidos asks your energy (0-4). Picks ONE task from your calendar + memory. Returns a 5-minute commitment script. Not a list. One thing. |
+
+Plus a system-prompt default tone shaped to AuDHD inertia: short
+replies, one option, slow pacing, never moralizing, never
+"shoulds." Spoons-style energy slider on Home; Settings toggle to
+flip to ADHD-only or autistic-only mode (adapts the prompt + UI).
+
+## Why Gemma 4
+
+This submission shows three of Gemma 4's distinctive features visibly:
+
+| Feature | Where in the flow |
+|---|---|
+| **Multimodal vision** | The "Look" flow — point the camera at your real mess, Gemma processes the image on-device. |
+| **Native function calling** | "Look" and "What Now" both emit structured tool calls. iOS sees a real action, not a chat reply. |
+| **Multilingual reasoning** | Apple's on-device speech in 50+ languages combines with Gemma's multilingual reasoning. Spanish "Look", Arabic "Ground" — same flow, same model, same device. |
+
+Variant: **Gemma 4 E2B** (4-bit, 1.5 GB) via MLX Swift. Vision through
+`MLXVLM`. Inference fully on-device.
+
+## Privacy posture
+
+- **`EgressGuard`** — a `URLProtocol` subclass installed at app launch
+  blocks all outbound traffic except the one-time Gemma 4 model
+  download. After bootstrap, the network is dead in code, not just in
+  policy. Verified via `tcpdump` in the technical write-up.
+- **Biometric app lock** with privacy-snapshot overlay so iOS's
+  app-switcher cache cannot capture journal content.
+- **Markdown audit log** of every memory entry — exportable,
+  user-editable, never synced.
+- **No telemetry, no analytics, no third-party SDKs.**
+- **`SafetyGate`** intercepts actual crisis language pre-LLM with
+  hardcoded resources (988 in US, 911/112 emergency). Grounding flow
+  is for non-crisis RSD — SafetyGate doesn't fire here, Gemma's
+  scripted response handles it.
+
+## What this app explicitly is not
+
+- Not a therapist, not a coach, not a productivity app.
+- Not a diagnostic tool. Self-identification only.
+- Not gamified. No streaks, no badges, no virtual pet.
+- Not a planner. (Tiimo + Apple Reminders cover that.)
+- Not a "you should journal more" nag. It's there when you need it
+  and silent the rest of the time.
+
+## Repository layout
+
+```
+Eidos/
+  App/                      # Bootstrap, DI, AppIntents
+  Inference/                # GemmaSession + MLX wrapper, prompt templates
+  Memory/                   # Markdown source-of-truth memory + decay + recall
+  KnowledgeBase/            # Substrate
+  Embedding/                # NLContextualEmbedding bridge
+  RAG/                      # ContextBuilder + RAGPipeline (tool-call loop)
+  Skills/                   # Tool-call substrate (AuADHD skills land next session)
+  Platform/                 # Camera + speech + audio capture; SafetyGate;
+                            # EgressGuard; AppLock; Diagnostics
+  UI/                       # Home (4 voice-first tiles), Chat, Memory, Settings
+  Resources/                # Info.plist, entitlements
+EidosShared/                # App-Group bridge for widget data
+EidosWidget/                # Control Widget entry points
+project.yml                 # xcodegen source
+```
 
 ## Build
+
+Requires macOS, Xcode 17+, iOS 26 SDK, and `xcodegen`.
 
 ```bash
 brew install xcodegen
@@ -28,82 +124,33 @@ xcodegen generate
 open Eidos.xcodeproj
 ```
 
-In Xcode:
-1. Blue project icon → **Eidos** target → **Signing & Capabilities** → check **Automatically manage signing** → pick your Personal Team.
-2. Same for the **EidosShareExtension** target — same team.
-3. Pick a destination: **iPhone 17 (iOS 26)** simulator for UI-only work, **My Mac (Designed for iPad)** for everything-but-the-simulator-can't-run-Metal-ML, or a real iPhone 15 Pro+ / iOS 26 device for the full thing.
-4. ⌘R.
+Run on iPhone 15 Pro or later for production multimodal performance.
+Mac (Designed for iPad) runs the full Gemma pipeline natively. The
+iOS Simulator falls back to canned inference responses (MLX Metal
+crashes inside the simulator).
 
-> The first build takes 5–15 minutes. Xcode compiles mlx-swift's Metal shaders, swift-syntax, and the rest of the 15-package SPM graph.
+**Demo-day note**: flip `minimalChatPromptEnabled` OFF in Settings →
+Diagnostics → Flags before recording. Tool calling depends on it.
 
-> `xcodebuild` on CI needs `-skipMacroValidation` because the `MLXHuggingFaceMacros` package requires explicit trust in the Xcode UI. In Xcode, click "Trust & Enable" when prompted.
+## Demo video
 
-## Requirements
+*Linked at submission.* The 3-minute video shows: a cluttered desk →
+camera → Eidos narrates "start with the coffee mug" → switch to voice
+"I have fifteen things and my brain stopped" → "energy 0-4?" → 1 task
+→ voice-journal ramble about a hard conversation → 10 sec later
+recalled by name → voice "I just got criticized, I want to quit" →
+grounding script + breath → toggle Airplane Mode → repeat. Filmed on
+a real iPhone with a real AuDHD adult driving.
 
-- **iOS 26+** (`project.yml` deployment target)
-- **Xcode 17+** with Swift 6 strict concurrency
-- **Apple Silicon Mac** for the Metal toolchain needed by MLX (any M1 or later)
-- Real **iPhone 15 Pro+** for inference testing — the iOS Simulator can't run MLX's custom Metal shaders
-- ~**8-10 GB free** on the device for install headroom plus the first model download
+## License + acknowledgments
 
-## What Eidos can do
+- **Eidos source**: MIT (see `LICENSE`).
+- **MLX Swift**: Apache-2.0.
+- **Gemma 4 model weights**: governed by Google's
+  [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+- **No third-party content bundled**. The RSD / grounding script is
+  derived from public 5-4-3-2-1 and breath-pacing patterns used in
+  CBT / DBT — common knowledge, not licensed material.
 
-| Surface | Behavior |
-|---|---|
-| **Chat** | Gemma 4 E2B streaming responses, memory- and KB-aware context, conversation persistence across launches. |
-| **Vision** | Camera and photo picker attachments flow through the MLXVLM image path. |
-| **Voice** | Mic button in chat bar. `SFSpeechRecognizer` with `requiresOnDeviceRecognition = true`; native raw-audio-to-Gemma waits on upstream MLX API support. |
-| **Memory** | Tiered MD-file store (P1–P5, core_identity/active/topic/recent/archive) with automatic priority decay and end-of-session crystallization. Full browser UI. Export to zip via Files app. |
-| **Knowledge base** | SwiftData-backed entries with vector + keyword hybrid search (RRF, k=60). Browse/edit/delete. |
-| **Skills** | 14 built-in: calendar read/write, reminders read/create, contacts search, KB search/add, durable remember-fact, digest, WhatsApp/SMS/Email/Call/Navigate/Ride. Action skills queue a confirmation where iOS requires user handoff. |
-| **Home** | Morning briefing combining calendar, reminders, memory highlights, and HealthKit insights. Daily notification at a configurable time. |
-| **Settings** | Model status, notification time picker, health permission button, decay pass button, storage counts. |
-
-## Privacy
-
-Eidos has a hard **no-egress** stance. After the one-time model download:
-
-- `EgressGuard` registers a `URLProtocol` that intercepts and blocks all outbound requests that aren't to an allowlisted HuggingFace host during model downloads.
-- On-device speech recognition (`requiresOnDeviceRecognition = true`).
-- HealthKit read access is optional; insights only, never raw samples.
-- Memory files live in the app sandbox Documents directory, never synced, never uploaded.
-
-### Honest scope of EgressGuard
-
-`URLProtocol.registerClass` only affects sessions that respect URL protocols — which is `URLSession.shared` and `URLSession(configuration: .default)`. The HuggingFace Swift client uses its own URLSession configuration, so the guard doesn't block it (but during a model download that's the only traffic we care about — and we want it). Our own `HuggingFaceDownloader` uses `URLSession.shared`, so the guard applies to it. For production hardening we'd pin HTTPS certificates and audit every dependency's networking. See `KNOWN_LIMITATIONS.md`.
-
-## Project layout
-
-```
-Eidos/
-  App/                    # @main, container, tab router, feature tour
-  Inference/              # MLX Swift session, HF downloader, prompt templates
-  Embedding/              # NLContextualEmbedding wrapper, vector store
-  KnowledgeBase/          # SwiftData models, repository, background actor
-  RAG/                    # ContextBuilder, RAGPipeline
-  Memory/                 # Entry, Manager, Index, DecayEngine, Crystallizer, Exporter
-  Skills/                 # Tool-calling protocol + built-in skills (incl. AppActionSkills)
-  Platform/               # EventKit, Contacts, HealthKit, Speech, AppAction registry,
-                          # NotificationScheduler, EgressGuard
-  Ingestion/              # WhatsApp / mail / plain-text importers, coordinator
-  Digest/                 # DigestGenerator, ProactiveDigestGenerator
-  UI/                     # SwiftUI views & view models
-  Resources/              # Info.plist, entitlements
-EidosShareExtension/      # Share Extension target, App Group queue ingestion
-EidosWidget/              # Widget, Live Activity, Control Widget surfaces
-EidosTests/               # Unit + integration tests (192)
-```
-
-## Testing
-
-```bash
-xcodebuild -project Eidos.xcodeproj -scheme Eidos \
-  -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -skipMacroValidation test
-```
-
-Tests run on the simulator even though inference doesn't work there — everything we test is pure logic or uses in-memory SwiftData / temp filesystem.
-
-## License
-
-TBD.
+For the live product spec, see [`PRODUCT.md`](PRODUCT.md).
+For working rules in this repo, see [`CLAUDE.md`](CLAUDE.md).

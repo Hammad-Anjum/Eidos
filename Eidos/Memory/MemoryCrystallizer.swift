@@ -91,7 +91,22 @@ actor MemoryCrystallizer {
         // Reconciliation pass: compare candidates against existing memory
         // and decide ADD / UPDATE / DELETE / NONE. Deduplicates the
         // classic "same fact stored five times" bug.
-        let decisions = (try? await reconcile(candidates: items)) ?? []
+        //
+        // If reconciliation throws (Gemma error, malformed JSON, thermal
+        // abort) we log it and fall through to insert-all rather than
+        // swallowing the failure — duplicates are recoverable, but a
+        // silent crystallizer regression is invisible without the log.
+        let decisions: [ReconciliationDecision]
+        do {
+            decisions = try await reconcile(candidates: items)
+        } catch {
+            EidosLogger.shared.log(.error, category: .memory,
+                event: "crystallizer.reconcile.failed",
+                message: error.localizedDescription,
+                payload: ["candidate_count": items.count]
+            )
+            decisions = []
+        }
 
         // Apply decisions. Fall back to naive insert-all if the
         // reconciliation pass produced no usable decisions (model

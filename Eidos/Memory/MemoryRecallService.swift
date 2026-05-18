@@ -89,7 +89,24 @@ actor MemoryRecallService {
     /// One-shot index bootstrap. Walks every tier and indexes every
     /// entry not already in `indexedEntryIDs`. Cheap on first run
     /// (typical user has < 200 memories), no-op on subsequent calls.
+    ///
+    /// Early-exits without iterating when the embedding service hasn't
+    /// loaded its NLContextualEmbedding assets. Without this guard,
+    /// every existing memory entry would call into `indexEntry` and
+    /// the embed() call would throw `EmbeddingError.notLoaded`, logging
+    /// one error per entry. On simulator the embedding service NEVER
+    /// loads (asset download blocked at `/var/db/com.apple.naturallanguaged`),
+    /// so every launch would emit ~N error lines for no functional
+    /// effect. On real device the rebuild runs later when the embedding
+    /// service finishes loading.
     func rebuildIndex() async {
+        guard await embedding.isLoaded else {
+            EidosLogger.shared.log(.info, category: .memory,
+                event: "memory.recall.rebuild.skipped",
+                message: "Embedding service not loaded yet; will retry on next save or app launch.")
+            return
+        }
+
         EidosLogger.shared.log(.info, category: .memory,
             event: "memory.recall.rebuild.start")
         var indexed = 0
@@ -186,14 +203,23 @@ actor MemoryRecallService {
         let raw = await vectorStore.topK(query: vector, k: topK * 2)
         var hits: [MemoryRecallHit] = []
         for result in raw where result.score >= minScore {
-            // Resolve UUID -> full MemoryEntry for the caller. We
-            // touch lastAccessedAt so the decay engine reflects that
-            // recall = activity.
+            // Resolve UUID -> full MemoryEntry for the caller.
             guard let entry = try? await manager.load(id: result.entryID) else {
                 continue
             }
             // Skip archived entries unless caller specifically wants them.
             if entry.tier == .archive { continue }
+            // Touch lastAccessedAt so the decay engine treats this
+            // recall as activity. Failures are logged, not surfaced —
+            // a stale timestamp shouldn't block returning the hit.
+            do {
+                try await manager.touch(id: entry.id)
+            } catch {
+                EidosLogger.shared.log(.warn, category: .memory,
+                    event: "memory.recall.touch.failed",
+                    message: error.localizedDescription,
+                    payload: ["entry_id": entry.id.uuidString])
+            }
             hits.append(MemoryRecallHit(entry: entry, score: result.score))
             if hits.count >= topK { break }
         }
