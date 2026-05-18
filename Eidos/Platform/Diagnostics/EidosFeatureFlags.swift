@@ -42,24 +42,31 @@ final class EidosFeatureFlags {
     /// tool access. When ON, Gemma can emit JSON tool calls that get
     /// dispatched via `SkillRegistry`.
     ///
-    /// **Defaults ON in iPhone Release.** Without this flag, the only
-    /// way to make Look / What Now / Recall fire was to disable
-    /// `minimalChatPromptEnabled` — which puts chat back on the full
-    /// pipeline that OOM-jetsams iPhone (the v9-v12 chat-crash class
-    /// of bug). Pairing curated-tools-in-chatLite with the minimal
-    /// prompt path keeps prefill cheap AND gives the demo surfaces
-    /// the tool-call hook they need. DEBUG defaults OFF so dev builds
-    /// can exercise both paths.
+    /// **Forced ON in iPhone Release — not user-toggleable.** Without
+    /// this flag, the only way to make Look / What Now / Recall fire
+    /// was to disable `minimalChatPromptEnabled`, which puts chat back
+    /// on the full pipeline that OOM-jetsams iPhone (the v9-v12 chat-
+    /// crash class of bug). Together with `minimalChatPromptEnabled`,
+    /// this pair is the demo-day invariant CLAUDE.md describes — a
+    /// stale UserDefaults override (e.g. from a prior install or a
+    /// manual toggle) would silently break Look / What Now / Recall,
+    /// so the getter ignores persistence on iPhone Release. DEBUG
+    /// keeps both paths exercisable.
     var curatedToolsInChatLite: Bool {
         get {
             #if DEBUG
-            let def = false
+            return bool(.curatedToolsInChatLite, default: false)
             #else
-            let def: Bool = (DeviceProfile.formFactor == .iPhone)
+            if DeviceProfile.formFactor == .iPhone { return true }
+            return bool(.curatedToolsInChatLite, default: false)
             #endif
-            return bool(.curatedToolsInChatLite, default: def)
         }
-        set { set(.curatedToolsInChatLite, newValue) }
+        set {
+            #if !DEBUG
+            if DeviceProfile.formFactor == .iPhone { return }
+            #endif
+            set(.curatedToolsInChatLite, newValue)
+        }
     }
 
     /// Biometric / passcode gate at app launch and after >5 min
@@ -135,27 +142,39 @@ final class EidosFeatureFlags {
     }
 
     /// Use a slim system prompt + bypass RAG/ambient/tools/history when
-    /// running a chat turn. **Default ON in iPhone RELEASE** to keep the
-    /// prefill KV cache inside Metal's heap budget — the full prompt
-    /// (system identity + RAG context + ambient + tool schemas + history)
-    /// can hit 10–15 K tokens, which spikes the GPU buffer past the
-    /// foreground-app ceiling on iPhone and gets the process reaped by the
-    /// kernel before Gemma emits a single token. Briefing path is
-    /// unaffected — it builds its own slim prompt.
+    /// running a chat turn. **Forced ON in iPhone RELEASE — not user-
+    /// toggleable.** The full prompt (system identity + RAG context +
+    /// ambient + tool schemas + history) reaches 10-15 K tokens, which
+    /// spikes the Metal heap past the foreground-app ceiling on iPhone
+    /// and gets the process reaped before Gemma emits a single token
+    /// (the v9-v12 chat-crash class of bug). chatLite is the only
+    /// inference path verified safe on iPhone Release per CLAUDE.md, so
+    /// this is a hard invariant rather than a flag. The getter ignores
+    /// any persisted UserDefaults value on iPhone Release — a stale
+    /// override from a prior install or a manual toggle was silently
+    /// re-introducing the OOM-jetsam path. Setter is a no-op for the
+    /// same reason. Mac / iPad / DEBUG keep the flag user-controllable
+    /// because those surfaces have the RAM + thermal headroom for the
+    /// full pipeline. Briefing path is unaffected — it builds its own
+    /// slim prompt.
     ///
     /// When ON: chat builds `[system: short-id, user: text]` only.
     /// When OFF (Mac, iPad, DEBUG): full RAG/tool pipeline as before.
     var minimalChatPromptEnabled: Bool {
         get {
-            // RELEASE on iPhone defaults ON; everywhere else defaults OFF.
             #if DEBUG
-            let def = false
+            return bool(.minimalChatPromptEnabled, default: false)
             #else
-            let def: Bool = (DeviceProfile.formFactor == .iPhone)
+            if DeviceProfile.formFactor == .iPhone { return true }
+            return bool(.minimalChatPromptEnabled, default: false)
             #endif
-            return bool(.minimalChatPromptEnabled, default: def)
         }
-        set { set(.minimalChatPromptEnabled, newValue) }
+        set {
+            #if !DEBUG
+            if DeviceProfile.formFactor == .iPhone { return }
+            #endif
+            set(.minimalChatPromptEnabled, newValue)
+        }
     }
 
     /// Hardcoded pre-LLM safety refusal for crisis / medical / legal.
