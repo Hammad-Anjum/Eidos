@@ -42,29 +42,20 @@ final class EidosFeatureFlags {
     /// tool access. When ON, Gemma can emit JSON tool calls that get
     /// dispatched via `SkillRegistry`.
     ///
-    /// **Forced ON in iPhone Release — not user-toggleable.** Without
-    /// this flag, the only way to make Look / What Now / Recall fire
-    /// was to disable `minimalChatPromptEnabled`, which puts chat back
-    /// on the full pipeline that OOM-jetsams iPhone (the v9-v12 chat-
-    /// crash class of bug). Together with `minimalChatPromptEnabled`,
-    /// this pair is the demo-day invariant CLAUDE.md describes — a
-    /// stale UserDefaults override (e.g. from a prior install or a
-    /// manual toggle) would silently break Look / What Now / Recall,
-    /// so the getter ignores persistence on iPhone Release. DEBUG
-    /// keeps both paths exercisable.
+    /// **Forced ON on iPhone hardware — any build config, not user-
+    /// toggleable.** The companion flag `minimalChatPromptEnabled` is
+    /// also forced ON on iPhone; without curated tools in that path,
+    /// Look / What Now / Recall would silently degrade to generic
+    /// chat replies. The gate is hardware, not Release: Debug builds
+    /// hit the same RAM ceiling. To exercise the full pipeline, run
+    /// on Mac Catalyst, iPad, or the simulator.
     var curatedToolsInChatLite: Bool {
         get {
-            #if DEBUG
-            return bool(.curatedToolsInChatLite, default: false)
-            #else
             if DeviceProfile.formFactor == .iPhone { return true }
             return bool(.curatedToolsInChatLite, default: false)
-            #endif
         }
         set {
-            #if !DEBUG
             if DeviceProfile.formFactor == .iPhone { return }
-            #endif
             set(.curatedToolsInChatLite, newValue)
         }
     }
@@ -142,37 +133,31 @@ final class EidosFeatureFlags {
     }
 
     /// Use a slim system prompt + bypass RAG/ambient/tools/history when
-    /// running a chat turn. **Forced ON in iPhone RELEASE — not user-
-    /// toggleable.** The full prompt (system identity + RAG context +
-    /// ambient + tool schemas + history) reaches 10-15 K tokens, which
-    /// spikes the Metal heap past the foreground-app ceiling on iPhone
-    /// and gets the process reaped before Gemma emits a single token
-    /// (the v9-v12 chat-crash class of bug). chatLite is the only
-    /// inference path verified safe on iPhone Release per CLAUDE.md, so
-    /// this is a hard invariant rather than a flag. The getter ignores
-    /// any persisted UserDefaults value on iPhone Release — a stale
-    /// override from a prior install or a manual toggle was silently
-    /// re-introducing the OOM-jetsam path. Setter is a no-op for the
-    /// same reason. Mac / iPad / DEBUG keep the flag user-controllable
-    /// because those surfaces have the RAM + thermal headroom for the
-    /// full pipeline. Briefing path is unaffected — it builds its own
-    /// slim prompt.
+    /// running a chat turn. **Forced ON on iPhone hardware — any build
+    /// config, not user-toggleable.** The full prompt (system identity
+    /// + RAG context + ambient + tool schemas + history) reaches
+    /// 10-15 K tokens, which spikes the Metal heap past the foreground-
+    /// app ceiling on iPhone and gets the process reaped before Gemma
+    /// emits a single token (the v9-v12 chat-crash class of bug). The
+    /// OOM-jetsam is a hardware ceiling, not a Release-build behavior
+    /// — Debug builds on iPhone hit the same RAM limit, so the
+    /// hardware check is the right gate. chatLite is the only
+    /// inference path verified safe on iPhone per CLAUDE.md, so this
+    /// is a hard invariant rather than a flag. The getter ignores any
+    /// persisted UserDefaults value on iPhone; the setter no-ops. To
+    /// exercise the full pipeline, build for Mac Catalyst, iPad, or
+    /// the simulator — those targets have RAM + thermal headroom.
+    /// Briefing path is unaffected; it builds its own slim prompt.
     ///
     /// When ON: chat builds `[system: short-id, user: text]` only.
-    /// When OFF (Mac, iPad, DEBUG): full RAG/tool pipeline as before.
+    /// When OFF (Mac, iPad, simulator): full RAG/tool pipeline.
     var minimalChatPromptEnabled: Bool {
         get {
-            #if DEBUG
-            return bool(.minimalChatPromptEnabled, default: false)
-            #else
             if DeviceProfile.formFactor == .iPhone { return true }
             return bool(.minimalChatPromptEnabled, default: false)
-            #endif
         }
         set {
-            #if !DEBUG
             if DeviceProfile.formFactor == .iPhone { return }
-            #endif
             set(.minimalChatPromptEnabled, newValue)
         }
     }

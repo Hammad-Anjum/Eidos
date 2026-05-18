@@ -236,18 +236,24 @@ final class AppContainer {
             await memoryRecall.indexEntry(entry)
         }
 
-        // Bootstrap the embedding-based memory recall index. Walks
-        // every tier and embeds entries that aren't already in the
-        // vector store. Deferred behind a Task.detached because:
-        // (1) it depends on EmbeddingService.load() being warm, which
-        //     happens lazily on first use,
-        // (2) we don't want to block app open on it — chats work
-        //     without recall, just less well, until the index lands.
-        Task.detached { [weak self] in
-            guard let self else { return }
-            await self.memoryRecall.rebuildIndex()
-        }
-
+        // Bootstrap the embedding service before scheduling the index
+        // rebuild. The previous comment here claimed load() happens
+        // "lazily on first use" — it does not. `embed()` throws
+        // `.notLoaded` if the in-memory model isn't pre-loaded, so
+        // without an explicit load() the rebuild bails immediately
+        // (memory.recall.rebuild.skipped) and every runtime query
+        // fails (memory.recall.query-embed-failed). Semantic recall
+        // stays blind for the entire session.
+        //
+        // Order: hasAssets → ensureAssetsAvailable (network) → load
+        // (in-memory). ensureAssetsAvailable must run before
+        // EgressGuard.install() since it hits Apple's CDN; load() is
+        // network-free and just pulls the cached asset into memory.
+        // Both are bounded — NLContextualEmbedding is ~50 MB, loads
+        // in well under a second on A17+. We block bootstrap on
+        // load() (not on rebuildIndex) so the rebuild that follows
+        // is guaranteed to see isLoaded == true.
+        //
         // NLContextualEmbedding asset download fails in the iOS Simulator
         // (permission denied on `/var/db/com.apple.naturallanguaged`). On
         // device, Apple's CDN delivers the asset on first launch.
@@ -255,7 +261,24 @@ final class AppContainer {
         if await !embeddingService.hasAssets() {
             try? await embeddingService.ensureAssetsAvailable()
         }
+        do {
+            try await embeddingService.load()
+        } catch {
+            EidosLogger.shared.error(.memory, event: "embedding.load.failed",
+                error: error, failure: .ragEmbed)
+        }
         #endif
+
+        // Index rebuild walks every tier and embeds entries that
+        // aren't already in the vector store. Detached so it doesn't
+        // block app open — chats work without recall, just less well,
+        // until the index lands. Safe to schedule here because
+        // embeddingService.load() above has completed (or logged a
+        // failure that explains why recall will stay rule-based-only).
+        Task.detached { [weak self] in
+            guard let self else { return }
+            await self.memoryRecall.rebuildIndex()
+        }
 
         // External AltStore testers may update over a broken build, which
         // preserves UserDefaults and model folders. Clear that stale state
